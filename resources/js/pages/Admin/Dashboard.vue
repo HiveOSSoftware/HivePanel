@@ -1,0 +1,115 @@
+<script setup lang="ts">
+import AppLayout from '@/layouts/AppLayout.vue'
+import { Head, Link } from '@inertiajs/vue3'
+import { Activity, Database, Server, Shield, Users } from 'lucide-vue-next'
+
+defineProps<{
+    stats: {
+        nodes: number
+        active_nodes: number
+        cells: number
+        users: number
+        audit_logs: number
+    }
+    recentLogs: any[]
+}>()
+
+function formatDate(value?: string) {
+    if (!value) return 'Unknown'
+    return new Date(value).toLocaleString()
+}
+
+function eventLabel(event: string) {
+    return event
+        .split('.')
+        .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(' ')
+}
+</script>
+
+<template>
+    <AppLayout
+        :context="'admin'"
+    >
+        <Head title="Admin" />
+
+        <div class="min-h-screen bg-surface-dark text-white">
+            <main class="px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
+                <div class="mx-auto space-y-5">
+                    <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
+                        <div class="flex items-center gap-3">
+                            <Shield class="size-6 text-hive" />
+                            <div>
+                                <h1 class="text-2xl font-black sm:text-3xl">
+                                    Admin
+                                </h1>
+                                <p class="mt-2 text-sm text-zinc-400">
+                                    Manage HivePanel, nodes, users, cells, and activity.
+                                </p>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="grid gap-3 md:grid-cols-5">
+                        <div class="rounded-panel border border-zinc-800 bg-surface p-5">
+                            <Server class="size-5 text-hive" />
+                            <div class="mt-3 text-xs font-black uppercase tracking-wide text-zinc-500">Nodes</div>
+                            <div class="mt-1 text-2xl font-black">{{ stats.nodes }}</div>
+                            <div class="mt-1 text-xs text-zinc-500">{{ stats.active_nodes }} active</div>
+                        </div>
+
+                        <div class="rounded-panel border border-zinc-800 bg-surface p-5">
+                            <Database class="size-5 text-status-success" />
+                            <div class="mt-3 text-xs font-black uppercase tracking-wide text-zinc-500">Cells</div>
+                            <div class="mt-1 text-2xl font-black">{{ stats.cells }}</div>
+                        </div>
+
+                        <div class="rounded-panel border border-zinc-800 bg-surface p-5">
+                            <Users class="size-5 text-status-warning" />
+                            <div class="mt-3 text-xs font-black uppercase tracking-wide text-zinc-500">Users</div>
+                            <div class="mt-1 text-2xl font-black">{{ stats.users }}</div>
+                        </div>
+
+                        <div class="rounded-panel border border-zinc-800 bg-surface p-5 md:col-span-2">
+                            <Activity class="size-5 text-purple-300" />
+                            <div class="mt-3 text-xs font-black uppercase tracking-wide text-zinc-500">Audit Logs</div>
+                            <div class="mt-1 text-2xl font-black">{{ stats.audit_logs }}</div>
+                        </div>
+                    </section>
+
+                    <section class="grid gap-5">
+                        <div class="rounded-panel border border-zinc-800 bg-surface p-5">
+                            <h2 class="text-lg font-black">Recent Activity</h2>
+
+                            <div class="mt-4 space-y-3">
+                                <div
+                                    v-for="log in recentLogs"
+                                    :key="log.id"
+                                    class="rounded-button border border-zinc-900 bg-[#0d0f11] p-4"
+                                >
+                                    <div class="text-sm font-bold text-zinc-300">
+                                        {{ log.description || eventLabel(log.event) }}
+                                    </div>
+
+                                    <div class="mt-2 flex flex-wrap gap-3 text-xs text-zinc-500">
+                                        <span>{{ eventLabel(log.event) }}</span>
+                                        <span>{{ log.user?.name || log.user?.email || 'System' }}</span>
+                                        <span v-if="log.cell">{{ log.cell.name }}</span>
+                                        <span>{{ formatDate(log.created_at) }}</span>
+                                    </div>
+                                </div>
+
+                                <div
+                                    v-if="recentLogs.length === 0"
+                                    class="rounded-button border border-zinc-900 bg-[#0d0f11] p-4 text-sm font-bold text-zinc-500"
+                                >
+                                    No activity yet.
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </main>
+        </div>
+    </AppLayout>
+</template>

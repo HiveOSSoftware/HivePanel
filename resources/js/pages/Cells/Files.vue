@@ -1,0 +1,998 @@
+<script setup lang="ts">
+import AppLayout from '@/layouts/AppLayout.vue'
+import { Head, router } from '@inertiajs/vue3'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import {
+    ArrowLeft,
+    Download,
+    File,
+    Folder,
+    FolderPlus,
+    LinkIcon,
+    RefreshCw,
+    RotateCcw,
+    Server,
+    Trash,
+    Upload,
+    ChevronDown,
+} from 'lucide-vue-next'
+
+const props = defineProps<{ cell: any }>()
+
+type FileEntry = {
+    name: string
+    path: string
+    type?: string
+    kind?: string
+    is_dir?: boolean
+    isDirectory?: boolean
+    directory?: boolean
+    size?: number
+    modified_at?: string
+}
+
+type ConfirmAction = 'delete' | 'restore' | 'permanent-delete'
+type CreateType = 'file' | 'folder'
+type UploadType = 'files' | 'folder' | 'url'
+
+const currentPath = ref('')
+const entries = ref<FileEntry[]>([])
+const loading = ref(false)
+const error = ref('')
+const actionLoading = ref('')
+
+const confirmOpen = ref(false)
+const confirmEntry = ref<FileEntry | null>(null)
+const confirmAction = ref<ConfirmAction>('delete')
+
+const createOpen = ref(false)
+const createType = ref<CreateType>('file')
+const createName = ref('')
+
+const uploadOpen = ref(false)
+const uploadType = ref<UploadType>('files')
+const uploadUrl = ref('')
+const uploadUrlName = ref('')
+const draggingUpload = ref(false)
+
+const sftpOpen = ref(false)
+
+const fileInput = ref<HTMLInputElement | null>(null)
+const folderInput = ref<HTMLInputElement | null>(null)
+
+const toastMessage = ref('')
+const toastType = ref<'success' | 'error'>('success')
+
+const cellId = computed(() => props.cell?.id)
+
+let dragDepth = 0
+
+const createMenuOpen = ref(false)
+const uploadMenuOpen = ref(false)
+
+const isRecycleBin = computed(() => {
+    return currentPath.value === '.recycle_bin' || currentPath.value.startsWith('.recycle_bin/')
+})
+
+const breadcrumbs = computed(() => {
+    if (!currentPath.value) return []
+
+    let running = ''
+
+    return currentPath.value.split('/').filter(Boolean).map((part) => {
+        running = running ? `${running}/${part}` : part
+        return { name: part, path: running }
+    })
+})
+
+const confirmTitle = computed(() => {
+    if (confirmAction.value === 'restore') return 'Restore File'
+    if (confirmAction.value === 'permanent-delete') return 'Delete Forever'
+    return 'Move to Recycle Bin'
+})
+
+const confirmMessage = computed(() => {
+    const name = confirmEntry.value?.name ?? 'this item'
+
+    if (confirmAction.value === 'restore') return `Restore "${name}" back to its original location?`
+    if (confirmAction.value === 'permanent-delete') return `Permanently delete "${name}"? This cannot be undone.`
+
+    return `Move "${name}" to the recycle bin?`
+})
+
+const confirmButtonText = computed(() => {
+    if (confirmAction.value === 'restore') return 'Restore'
+    if (confirmAction.value === 'permanent-delete') return 'Delete Forever'
+    return 'Move to Recycle Bin'
+})
+
+const confirmButtonClass = computed(() => {
+    if (confirmAction.value === 'restore') {
+        return 'border-status-success bg-status-success text-white hover:brightness-110'
+    }
+
+    return 'border-status-danger bg-status-danger text-white hover:brightness-110'
+})
+
+function csrfToken() {
+    return document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content ?? ''
+}
+
+async function responseError(response: Response, fallback = 'Something went wrong.') {
+    try {
+        const data = await response.json()
+        return data.message || data.error || fallback
+    } catch {
+        const text = await response.text()
+        return text || fallback
+    }
+}
+
+function showToast(message: string, type: 'success' | 'error' = 'success') {
+    toastMessage.value = message
+    toastType.value = type
+
+    setTimeout(() => {
+        toastMessage.value = ''
+    }, 4500)
+}
+
+function showError(message: string) {
+    error.value = message
+    showToast(message, 'error')
+}
+
+function closeConfirm(force = false) {
+    if (actionLoading.value && !force) return
+    confirmOpen.value = false
+    confirmEntry.value = null
+}
+
+function isFolder(entry: FileEntry) {
+    const type = String(entry.type ?? entry.kind ?? '').toLowerCase()
+
+    return (
+        type === 'folder' ||
+        type === 'directory' ||
+        type === 'dir' ||
+        entry.is_dir === true ||
+        entry.isDirectory === true ||
+        entry.directory === true
+    )
+}
+
+function fullPath(name: string) {
+    return currentPath.value ? `${currentPath.value}/${name}` : name
+}
+
+function formatBytes(bytes?: number) {
+    const value = bytes ?? 0
+
+    if (value >= 1024 * 1024 * 1024) return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`
+    if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(2)} MB`
+    if (value >= 1024) return `${(value / 1024).toFixed(2)} KB`
+
+    return `${value} B`
+}
+
+function isRecycleBinEntry(entry: FileEntry) {
+    return entry.path === '.recycle_bin' || entry.name === '.recycle_bin'
+}
+
+function displayName(entry: FileEntry) {
+    return isRecycleBinEntry(entry) ? 'Recycle Bin' : entry.name
+}
+
+function canDeleteEntry(entry: FileEntry) {
+    return !isRecycleBinEntry(entry)
+}
+
+function hasFiles(event: DragEvent) {
+    return Array.from(event.dataTransfer?.types ?? []).includes('Files')
+}
+
+function onWindowDragEnter(event: DragEvent) {
+    if (!hasFiles(event)) return
+
+    event.preventDefault()
+    dragDepth++
+    draggingUpload.value = true
+}
+
+function onWindowDragOver(event: DragEvent) {
+    if (!hasFiles(event)) return
+
+    event.preventDefault()
+    draggingUpload.value = true
+}
+
+function onWindowDragLeave(event: DragEvent) {
+    if (!hasFiles(event)) return
+
+    event.preventDefault()
+    dragDepth = Math.max(0, dragDepth - 1)
+
+    if (dragDepth === 0) {
+        draggingUpload.value = false
+    }
+}
+
+function onWindowDrop(event: DragEvent) {
+    if (!hasFiles(event)) return
+
+    event.preventDefault()
+
+    dragDepth = 0
+    draggingUpload.value = false
+
+    const files = event.dataTransfer?.files ?? null
+    uploadFiles(files, false)
+}
+
+function onUploadDrop(event: DragEvent) {
+    event.preventDefault()
+
+    dragDepth = 0
+    draggingUpload.value = false
+
+    const files = event.dataTransfer?.files ?? null
+    uploadFiles(files, uploadType.value === 'folder')
+}
+
+async function loadFiles(path = currentPath.value) {
+    if (!cellId.value) return
+
+    loading.value = true
+    error.value = ''
+
+    try {
+        const response = await fetch(`/cells/${cellId.value}/files-json?path=${encodeURIComponent(path)}`, {
+            headers: { Accept: 'application/json' },
+        })
+
+        if (!response.ok) {
+            error.value = await responseError(response, 'Failed to load files.')
+            return
+        }
+
+        const data = await response.json()
+
+        currentPath.value = data.path ?? path
+        entries.value = (data.files ?? []).sort((a: FileEntry, b: FileEntry) => {
+            const aFolder = isFolder(a)
+            const bFolder = isFolder(b)
+
+            if (aFolder !== bFolder) return aFolder ? -1 : 1
+
+            return a.name.localeCompare(b.name, undefined, {
+                sensitivity: 'base',
+                numeric: true,
+            })
+        })
+    } finally {
+        loading.value = false
+    }
+}
+
+function openEntry(entry: FileEntry) {
+    if (isFolder(entry)) {
+        loadFiles(entry.path)
+        return
+    }
+
+    router.visit(`/cells/${cellId.value}/files/edit?path=${encodeURIComponent(entry.path)}`)
+}
+
+function goHome() {
+    loadFiles('')
+}
+
+function goUp() {
+    if (!currentPath.value) return
+
+    const parts = currentPath.value.split('/').filter(Boolean)
+    parts.pop()
+
+    loadFiles(parts.join('/'))
+}
+
+function downloadFile(entry: FileEntry) {
+    window.location.href = `/cells/${cellId.value}/files/download?path=${encodeURIComponent(entry.path)}`
+}
+
+function openConfirm(action: ConfirmAction, entry: FileEntry) {
+    confirmAction.value = action
+    confirmEntry.value = entry
+    confirmOpen.value = true
+}
+
+function openCreate(type: CreateType) {
+    createType.value = type
+    createName.value = ''
+    createOpen.value = true
+}
+
+function closeCreate() {
+    if (actionLoading.value) return
+    createOpen.value = false
+    createName.value = ''
+}
+
+function openUpload(type: UploadType) {
+    uploadType.value = type
+    uploadUrl.value = ''
+    uploadUrlName.value = ''
+    draggingUpload.value = false
+    uploadOpen.value = true
+}
+
+function closeUpload() {
+    if (actionLoading.value) return
+    uploadOpen.value = false
+    uploadUrl.value = ''
+    uploadUrlName.value = ''
+    draggingUpload.value = false
+}
+
+async function createItem() {
+    if (!cellId.value || !createName.value.trim()) return
+
+    const path = fullPath(createName.value.trim())
+    const endpoint = createType.value === 'file' ? 'file' : 'folder'
+
+    actionLoading.value = path
+    error.value = ''
+
+    try {
+        const response = await fetch(`/cells/${cellId.value}/files/${endpoint}`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-TOKEN': csrfToken(),
+            },
+            body: JSON.stringify({ path }),
+        })
+
+        if (!response.ok) {
+            showError(await responseError(response, `Failed to create ${createType.value}.`))
+            return
+        }
+
+        await loadFiles()
+        closeCreate()
+        showToast(createType.value === 'file' ? 'File created.' : 'Folder created.')
+    } finally {
+        actionLoading.value = ''
+    }
+}
+
+async function uploadFiles(files: FileList | null, folderUpload = false) {
+    if (!cellId.value || !files || files.length === 0) return
+
+    actionLoading.value = 'upload'
+    error.value = ''
+
+    try {
+        for (const file of Array.from(files)) {
+            const formData = new FormData()
+            formData.append('file', file)
+
+            if (folderUpload) {
+                formData.append('relative_path', (file as any).webkitRelativePath || file.name)
+            }
+
+            const response = await fetch(`/cells/${cellId.value}/files/upload?path=${encodeURIComponent(currentPath.value)}`, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    Accept: 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRF-TOKEN': csrfToken(),
+                },
+                body: formData,
+            })
+
+            if (!response.ok) {
+                showError(await responseError(response, 'Upload failed.'))
+                return
+            }
+        }
+
+        await loadFiles()
+        closeUpload()
+        showToast(folderUpload ? 'Folder uploaded.' : 'Files uploaded.')
+    } finally {
+        actionLoading.value = ''
+        if (fileInput.value) fileInput.value.value = ''
+        if (folderInput.value) folderInput.value.value = ''
+    }
+}
+
+async function uploadFromUrl() {
+    if (!cellId.value || !uploadUrl.value.trim() || !uploadUrlName.value.trim()) return
+
+    const path = fullPath(uploadUrlName.value.trim())
+
+    actionLoading.value = 'upload-url'
+    error.value = ''
+
+    try {
+        const response = await fetch(`/cells/${cellId.value}/files/upload-url`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-TOKEN': csrfToken(),
+            },
+            body: JSON.stringify({
+                path,
+                url: uploadUrl.value.trim(),
+            }),
+        })
+
+        if (!response.ok) {
+            showError(await responseError(response, 'URL upload failed.'))
+            return
+        }
+
+        await loadFiles()
+        closeUpload()
+        showToast('File uploaded from URL.')
+    } finally {
+        actionLoading.value = ''
+    }
+}
+
+async function confirmSelectedAction() {
+    if (!confirmEntry.value) return
+
+    if (confirmAction.value === 'restore') {
+        restoreFile(confirmEntry.value)
+        return
+    }
+
+    if (confirmAction.value === 'permanent-delete') {
+        permanentDeleteFile(confirmEntry.value)
+        return
+    }
+
+    deleteFile(confirmEntry.value)
+}
+
+async function deleteFile(entry: FileEntry) {
+    if (!cellId.value) return
+
+    actionLoading.value = entry.path
+    error.value = ''
+
+    try {
+        const response = await fetch(`/cells/${cellId.value}/files/delete?path=${encodeURIComponent(entry.path)}`, {
+            method: 'DELETE',
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-TOKEN': csrfToken(),
+            },
+        })
+
+        if (!response.ok) {
+            showError(await responseError(response, 'Failed to move item to recycle bin.'))
+            return
+        }
+
+        await loadFiles()
+        closeConfirm(true)
+        showToast('Moved to recycle bin.')
+    } finally {
+        actionLoading.value = ''
+    }
+}
+
+async function restoreFile(entry: FileEntry) {
+    if (!cellId.value) return
+
+    actionLoading.value = entry.path
+    error.value = ''
+
+    try {
+        const response = await fetch(`/cells/${cellId.value}/files/restore`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-TOKEN': csrfToken(),
+            },
+            body: JSON.stringify({ path: entry.path }),
+        })
+
+        if (!response.ok) {
+            showError(await responseError(response, 'Failed to restore item.'))
+            return
+        }
+
+        await loadFiles()
+        closeConfirm(true)
+        showToast('Item restored.')
+    } finally {
+        actionLoading.value = ''
+    }
+}
+
+async function permanentDeleteFile(entry: FileEntry) {
+    if (!cellId.value) return
+
+    actionLoading.value = entry.path
+    error.value = ''
+
+    try {
+        const response = await fetch(`/cells/${cellId.value}/files/permanent?path=${encodeURIComponent(entry.path)}`, {
+            method: 'DELETE',
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-TOKEN': csrfToken(),
+            },
+        })
+
+        if (!response.ok) {
+            showError(await responseError(response, 'Failed to permanently delete item.'))
+            return
+        }
+
+        await loadFiles()
+        closeConfirm(true)
+        showToast('Item permanently deleted.')
+    } finally {
+        actionLoading.value = ''
+    }
+}
+
+onMounted(() => {
+    loadFiles('')
+
+    window.addEventListener('dragenter', onWindowDragEnter)
+    window.addEventListener('dragover', onWindowDragOver)
+    window.addEventListener('dragleave', onWindowDragLeave)
+    window.addEventListener('drop', onWindowDrop)
+})
+
+onUnmounted(() => {
+    window.removeEventListener('dragenter', onWindowDragEnter)
+    window.removeEventListener('dragover', onWindowDragOver)
+    window.removeEventListener('dragleave', onWindowDragLeave)
+    window.removeEventListener('drop', onWindowDrop)
+})
+</script>
+
+<template>
+    <AppLayout
+        :context="'server'"
+        :active-cell="cell"
+        :active-cell-status="cell.status ?? 'offline'"
+    >
+        <Head :title="`${cell.name} Files`" />
+
+        <div class="min-h-screen bg-surface-dark text-white">
+            <main class="px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
+                <div class="mx-auto space-y-5">
+                    <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
+                        <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                            <div>
+                                <h1 class="text-2xl font-black sm:text-3xl">
+                                    File Manager
+                                </h1>
+
+                                <div class="mt-2 flex flex-wrap items-center gap-2 text-sm text-zinc-400">
+                                    <button class="text-hive hover:text-hive-light" @click="goHome">
+                                        Home
+                                    </button>
+
+                                    <template v-for="crumb in breadcrumbs" :key="crumb.path">
+                                        <span class="text-zinc-600">/</span>
+
+                                        <button class="hover:text-hive" @click="loadFiles(crumb.path)">
+                                            {{ crumb.name }}
+                                        </button>
+                                    </template>
+
+                                    <span
+                                        v-if="isRecycleBin"
+                                        class="rounded-full border border-status-danger/30 bg-status-danger/10 px-2 py-0.5 text-xs font-bold text-status-danger"
+                                    >
+                                        Recycle Bin
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div class="flex flex-wrap gap-2">
+                                <button class="inline-flex items-center gap-2 rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 transition hover:border-hive hover:text-hive" @click="goUp">
+                                    <ArrowLeft class="size-4" />
+                                    Up
+                                </button>
+
+                                <button class="inline-flex items-center gap-2 rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 transition hover:border-hive hover:text-hive" @click="loadFiles()">
+                                    <RefreshCw class="size-4" />
+                                    Refresh
+                                </button>
+
+                                <button class="inline-flex items-center gap-2 rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 transition hover:border-hive hover:text-hive" @click="sftpOpen = true">
+                                    <Server class="size-4" />
+                                    SFTP
+                                </button>
+
+                                <div class="relative">
+                                    <button
+                                        class="inline-flex items-center gap-2 rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 transition hover:border-hive hover:text-hive"
+                                        @click="createMenuOpen = !createMenuOpen; uploadMenuOpen = false"
+                                    >
+                                        <FolderPlus class="size-4" />
+                                        New
+                                        <ChevronDown
+                                            class="ml-1 size-4 transition-transform duration-200"
+                                            :class="{ 'rotate-180': createMenuOpen }"
+                                        />
+                                    </button>
+
+                                    <div
+                                        v-if="createMenuOpen"
+                                        class="absolute right-0 z-30 mt-2 w-44 overflow-hidden rounded-button border border-zinc-800 bg-surface shadow-[0_20px_60px_rgba(0,0,0,0.45)]"
+                                    >
+                                        <button
+                                            class="block w-full px-4 py-3 text-left text-sm font-bold text-zinc-300 hover:bg-hive/10 hover:text-hive"
+                                            @click="createMenuOpen = false; openCreate('file')"
+                                        >
+                                            New File
+                                        </button>
+
+                                        <button
+                                            class="block w-full px-4 py-3 text-left text-sm font-bold text-zinc-300 hover:bg-hive/10 hover:text-hive"
+                                            @click="createMenuOpen = false; openCreate('folder')"
+                                        >
+                                            New Folder
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div class="relative">
+                                    <button
+                                        class="inline-flex items-center gap-2 rounded-button border border-hive bg-hive px-4 py-2 text-sm font-black text-white transition hover:bg-hive-light"
+                                        @click="uploadMenuOpen = !uploadMenuOpen; createMenuOpen = false"
+                                    >
+                                        <Upload class="size-4" />
+                                        Upload
+                                        <ChevronDown
+                                            class="ml-1 size-4 transition-transform duration-200"
+                                            :class="{ 'rotate-180': uploadMenuOpen }"
+                                        />
+                                    </button>
+
+                                    <div
+                                        v-if="uploadMenuOpen"
+                                        class="absolute right-0 z-30 mt-2 w-48 overflow-hidden rounded-button border border-zinc-800 bg-surface shadow-[0_20px_60px_rgba(0,0,0,0.45)]"
+                                    >
+                                        <button
+                                            class="block w-full px-4 py-3 text-left text-sm font-bold text-zinc-300 hover:bg-hive/10 hover:text-hive"
+                                            @click="uploadMenuOpen = false; openUpload('files')"
+                                        >
+                                            Upload Files
+                                        </button>
+
+                                        <button
+                                            class="block w-full px-4 py-3 text-left text-sm font-bold text-zinc-300 hover:bg-hive/10 hover:text-hive"
+                                            @click="uploadMenuOpen = false; openUpload('folder')"
+                                        >
+                                            Upload Folder
+                                        </button>
+
+                                        <button
+                                            class="block w-full px-4 py-3 text-left text-sm font-bold text-zinc-300 hover:bg-hive/10 hover:text-hive"
+                                            @click="uploadMenuOpen = false; openUpload('url')"
+                                        >
+                                            Upload From URL
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section
+                        class="overflow-hidden rounded-panel border border-zinc-800 bg-surface">
+                        <div class="hidden grid-cols-[1fr_120px_170px_130px] border-b border-zinc-800 bg-surface-light px-5 py-3 text-xs font-black uppercase tracking-wide text-zinc-500 sm:grid">
+                            <div>Name</div>
+                            <div>Size</div>
+                            <div>Modified</div>
+                            <div class="text-right">Actions</div>
+                        </div>
+
+                        <div v-if="loading" class="p-6 text-zinc-500">
+                            Loading files...
+                        </div>
+
+                        <div v-else-if="error" class="p-6 font-bold text-status-danger">
+                            {{ error }}
+                        </div>
+
+                        <div v-else-if="entries.length === 0" class="p-6 text-zinc-500">
+                            This folder is empty.
+                        </div>
+
+                        <div
+                            v-for="entry in entries"
+                            v-else
+                            :key="entry.path"
+                            class="grid cursor-pointer grid-cols-[1fr_auto] gap-3 border-b border-zinc-900 px-4 py-4 text-sm transition last:border-b-0 hover:bg-surface-hover sm:grid-cols-[1fr_120px_170px_130px] sm:items-center sm:px-5 sm:py-3"
+                            @dblclick="openEntry(entry)"
+                        >
+                            <div class="flex min-w-0 items-center gap-3">
+                                <Trash
+                                    v-if="isRecycleBinEntry(entry)"
+                                    class="size-5 shrink-0 text-status-danger"
+                                />
+                                <Folder
+                                    v-else-if="isFolder(entry)"
+                                    class="size-5 shrink-0 text-hive"
+                                />
+                                <File
+                                    v-else
+                                    class="size-5 shrink-0 text-zinc-400"
+                                />
+
+                                <button class="truncate text-left font-bold text-zinc-200 hover:text-hive" @click="openEntry(entry)">
+                                    {{ displayName(entry) }}
+                                </button>
+                            </div>
+
+                            <div class="hidden text-zinc-500 sm:block">
+                                {{ isFolder(entry) ? '—' : formatBytes(entry.size) }}
+                            </div>
+
+                            <div class="hidden text-zinc-500 sm:block">
+                                {{ entry.modified_at ?? '—' }}
+                            </div>
+
+                            <div class="flex justify-end gap-2">
+                                <button v-if="!isFolder(entry)" class="text-zinc-500 transition hover:text-hive" @click.stop="downloadFile(entry)">
+                                    <Download class="size-4" />
+                                </button>
+
+                                <template v-if="isRecycleBin">
+                                    <button class="text-zinc-500 transition hover:text-status-success disabled:opacity-50" :disabled="actionLoading === entry.path" title="Restore" @click.stop="openConfirm('restore', entry)">
+                                        <RotateCcw class="size-4" />
+                                    </button>
+
+                                    <button class="text-zinc-500 transition hover:text-status-danger disabled:opacity-50" :disabled="actionLoading === entry.path" title="Delete forever" @click.stop="openConfirm('permanent-delete', entry)">
+                                        <Trash class="size-4" />
+                                    </button>
+                                </template>
+
+                                <button
+                                    v-else-if="canDeleteEntry(entry)"
+                                    class="text-zinc-500 transition hover:text-status-danger disabled:opacity-50"
+                                    :disabled="actionLoading === entry.path"
+                                    title="Move to recycle bin"
+                                    @click.stop="openConfirm('delete', entry)"
+                                >
+                                    <Trash class="size-4" />
+                                </button>
+                            </div>
+
+                            <div class="col-span-2 flex flex-wrap gap-3 text-xs text-zinc-500 sm:hidden">
+                                <span>{{ isFolder(entry) ? 'Folder' : formatBytes(entry.size) }}</span>
+                                <span v-if="entry.modified_at">{{ entry.modified_at }}</span>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </main>
+        </div>
+
+        <input ref="fileInput" type="file" class="hidden" multiple @change="uploadFiles(($event.target as HTMLInputElement).files, false)" />
+        <input ref="folderInput" type="file" class="hidden" multiple webkitdirectory @change="uploadFiles(($event.target as HTMLInputElement).files, true)" />
+
+        <div v-if="uploadOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+            <div class="w-full max-w-md rounded-panel border border-zinc-800 bg-surface p-6">
+                <h2 class="text-xl font-black text-white">
+                    {{ uploadType === 'url' ? 'Upload From URL' : uploadType === 'folder' ? 'Upload Folder' : 'Upload Files' }}
+                </h2>
+
+                <p class="mt-2 text-sm text-zinc-400">
+                    Uploading to: <span class="font-mono text-hive">{{ currentPath || '/' }}</span>
+                </p>
+
+                <div v-if="uploadType === 'url'" class="mt-5 space-y-3">
+                    <input
+                        v-model="uploadUrl"
+                        class="w-full rounded-button border border-zinc-800 bg-surface-light px-4 py-3 text-sm text-zinc-200 outline-none transition focus:border-hive"
+                        placeholder="https://example.com/plugin.jar"
+                    />
+
+                    <input
+                        v-model="uploadUrlName"
+                        class="w-full rounded-button border border-zinc-800 bg-surface-light px-4 py-3 font-mono text-sm text-zinc-200 outline-none transition focus:border-hive"
+                        placeholder="plugins/plugin.jar"
+                    />
+                </div>
+
+                <div
+                    v-else
+                    class="mt-5 cursor-pointer rounded-button border border-dashed p-6 text-center transition"
+                    :class="draggingUpload
+                        ? 'border-hive bg-hive/10'
+                        : 'border-zinc-700 bg-surface-light'"
+                    @dragover.prevent="draggingUpload = true"
+                    @dragleave.prevent="draggingUpload = false"
+                    @drop.prevent="onUploadDrop"
+                    @click="uploadType === 'folder' ? folderInput?.click() : fileInput?.click()"
+                >
+                    <Upload class="mx-auto size-8 text-hive" />
+
+                    <p class="mt-3 text-sm text-zinc-400">
+                        Drag and drop {{ uploadType === 'folder' ? 'a folder' : 'files' }} here, or click to choose.
+                    </p>
+
+                    <p v-if="actionLoading === 'upload'" class="mt-3 text-xs font-bold text-hive">
+                        Uploading...
+                    </p>
+                </div>
+
+                <div class="mt-6 flex justify-end gap-3">
+                    <button class="rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300" @click="closeUpload">
+                        Cancel
+                    </button>
+
+                    <button
+                        v-if="uploadType === 'files'"
+                        class="rounded-button border border-hive bg-hive px-4 py-2 text-sm font-black text-white"
+                        @click="fileInput?.click()"
+                    >
+                        Choose Files
+                    </button>
+
+                    <button
+                        v-else-if="uploadType === 'folder'"
+                        class="rounded-button border border-hive bg-hive px-4 py-2 text-sm font-black text-white"
+                        @click="folderInput?.click()"
+                    >
+                        Choose Folder
+                    </button>
+
+                    <button
+                        v-else
+                        class="rounded-button border border-hive bg-hive px-4 py-2 text-sm font-black text-white disabled:opacity-50"
+                        :disabled="!!actionLoading || !uploadUrl.trim() || !uploadUrlName.trim()"
+                        @click="uploadFromUrl"
+                    >
+                        {{ actionLoading ? 'Uploading...' : 'Upload' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="createOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+            <div class="w-full max-w-md rounded-panel border border-zinc-800 bg-surface p-6">
+                <h2 class="text-xl font-black text-white">
+                    Create {{ createType === 'file' ? 'File' : 'Folder' }}
+                </h2>
+
+                <p class="mt-2 text-sm text-zinc-400">
+                    Creating in: <span class="font-mono text-hive">{{ currentPath || '/' }}</span>
+                </p>
+
+                <input
+                    v-model="createName"
+                    class="mt-5 w-full rounded-button border border-zinc-800 bg-surface-light px-4 py-3 font-mono text-sm text-zinc-200 outline-none transition focus:border-hive"
+                    :placeholder="createType === 'file' ? 'server.properties' : 'plugins'"
+                    @keydown.enter.prevent="createItem"
+                />
+
+                <div class="mt-6 flex justify-end gap-3">
+                    <button class="rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300" @click="closeCreate">
+                        Cancel
+                    </button>
+
+                    <button class="rounded-button border border-hive bg-hive px-4 py-2 text-sm font-black text-white disabled:opacity-50" :disabled="!!actionLoading || !createName.trim()" @click="createItem">
+                        {{ actionLoading ? 'Creating...' : 'Create' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="sftpOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+            <div class="w-full max-w-md rounded-panel border border-zinc-800 bg-surface p-6">
+                <div class="flex items-start gap-4">
+                    <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-button bg-hive/10 text-hive">
+                        <Server class="size-6" />
+                    </div>
+
+                    <div>
+                        <h2 class="text-xl font-black text-white">
+                            SFTP Details
+                        </h2>
+
+                        <p class="mt-2 text-sm leading-6 text-zinc-400">
+                            SFTP support will be added later. This modal is ready for host, port, username, and password/reset details.
+                        </p>
+                    </div>
+                </div>
+
+                <div class="mt-6 flex justify-end">
+                    <button class="rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 hover:text-white" @click="sftpOpen = false">
+                        Close
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="confirmOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+            <div class="w-full max-w-md rounded-panel border border-zinc-800 bg-surface p-6 shadow-[0_20px_80px_rgba(0,0,0,0.55)]">
+                <div class="flex items-start gap-4">
+                    <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-button" :class="confirmAction === 'restore' ? 'bg-status-success/10 text-status-success' : 'bg-status-danger/10 text-status-danger'">
+                        <RotateCcw v-if="confirmAction === 'restore'" class="size-6" />
+                        <Trash v-else class="size-6" />
+                    </div>
+
+                    <div class="min-w-0">
+                        <h2 class="text-xl font-black text-white">
+                            {{ confirmTitle }}
+                        </h2>
+
+                        <p class="mt-2 text-sm leading-6 text-zinc-400">
+                            {{ confirmMessage }}
+                        </p>
+
+                        <p v-if="confirmEntry" class="mt-3 break-all rounded-button border border-zinc-800 bg-surface-light px-3 py-2 font-mono text-xs text-zinc-500">
+                            {{ confirmEntry.path }}
+                        </p>
+                    </div>
+                </div>
+
+                <div class="mt-6 flex justify-end gap-3">
+                    <button class="rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 transition hover:border-zinc-600 hover:text-white disabled:opacity-50" :disabled="!!actionLoading" @click="closeConfirm">
+                        Cancel
+                    </button>
+
+                    <button class="rounded-button border px-4 py-2 text-sm font-black transition disabled:cursor-not-allowed disabled:opacity-60" :class="confirmButtonClass" :disabled="!!actionLoading" @click="confirmSelectedAction">
+                        {{ actionLoading ? 'Working...' : confirmButtonText }}
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div
+            v-if="draggingUpload"
+            class="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+        >
+            <div class="pointer-events-none w-full max-w-md rounded-panel border border-hive bg-surface p-8 text-center shadow-hive">
+                <Upload class="mx-auto size-12 text-hive" />
+
+                <h2 class="mt-4 text-xl font-black text-white">
+                    Drop files to upload
+                </h2>
+
+                <p class="mt-2 text-sm text-zinc-400">
+                    Uploading to <span class="font-mono text-hive">{{ currentPath || '/' }}</span>
+                </p>
+            </div>
+        </div>
+        
+        <div
+            v-if="toastMessage"
+            class="fixed bottom-5 right-5 z-[60] max-w-md rounded-button border px-5 py-3 text-sm font-bold shadow-[0_20px_70px_rgba(0,0,0,0.45)]"
+            :class="toastType === 'success'
+                ? 'border-status-success/40 bg-status-success/15 text-status-success'
+                : 'border-status-danger/40 bg-status-danger/15 text-status-danger'"
+        >
+            {{ toastMessage }}
+        </div>
+    </AppLayout>
+</template>

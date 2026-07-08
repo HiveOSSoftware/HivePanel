@@ -1,0 +1,577 @@
+<script setup lang="ts">
+import AppLayout from '@/layouts/AppLayout.vue'
+import { Head } from '@inertiajs/vue3'
+import {
+    CalendarClock,
+    CheckCircle,
+    Clock,
+    Play,
+    Plus,
+    Trash,
+    X,
+} from 'lucide-vue-next'
+import { computed, ref } from 'vue'
+
+const props = defineProps<{
+    cell: any
+    tasks: ServerTask[]
+}>()
+
+type TaskType = 'command' | 'backup' | 'restart' | 'stop' | 'start' | 'utility'
+type ScheduleType = 'hourly' | 'daily' | 'weekly' | 'interval'
+
+type TaskRun = {
+    id: number
+    status: string
+    output?: string
+    error?: string
+    started_at?: string
+    finished_at?: string
+}
+
+type ServerTask = {
+    id: number
+    cell_id: string
+    name: string
+    type: TaskType
+    command?: string
+    utility?: string
+    schedule_type: ScheduleType
+    schedule_value?: string
+    enabled: boolean
+    last_run_at?: string
+    next_run_at?: string
+    runs?: TaskRun[]
+}
+
+const taskList = ref<ServerTask[]>([...props.tasks])
+const modalOpen = ref(false)
+const saving = ref(false)
+const actionLoading = ref<number | null>(null)
+const error = ref('')
+const toastMessage = ref('')
+const toastType = ref<'success' | 'error'>('success')
+
+const form = ref({
+    name: '',
+    type: 'command' as TaskType,
+    command: '',
+    utility: '',
+    schedule_type: 'daily' as ScheduleType,
+    schedule_value: '03:00',
+    enabled: true,
+})
+
+const cellId = computed(() => props.cell?.id)
+
+function csrfToken() {
+    return document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content ?? ''
+}
+
+function showToast(message: string, type: 'success' | 'error' = 'success') {
+    toastMessage.value = message
+    toastType.value = type
+    setTimeout(() => toastMessage.value = '', 3000)
+}
+
+async function readError(response: Response) {
+    const text = await response.text()
+
+    try {
+        const json = JSON.parse(text)
+        return json.message || json.error || text
+    } catch {
+        return text
+    }
+}
+
+function resetForm() {
+    form.value = {
+        name: '',
+        type: 'command',
+        command: '',
+        utility: '',
+        schedule_type: 'daily',
+        schedule_value: '03:00',
+        enabled: true,
+    }
+}
+
+function openModal() {
+    resetForm()
+    error.value = ''
+    modalOpen.value = true
+}
+
+function closeModal() {
+    if (saving.value) return
+    modalOpen.value = false
+}
+
+function formatDate(value?: string) {
+    if (!value) return 'Never'
+    return new Date(value).toLocaleString()
+}
+
+function taskTypeLabel(type: string) {
+    return type.replace('_', ' ').replace(/\b\w/g, char => char.toUpperCase())
+}
+
+function scheduleLabel(task: ServerTask) {
+    if (task.schedule_type === 'hourly') return 'Hourly'
+    if (task.schedule_type === 'daily') return `Daily at ${task.schedule_value || '03:00'}`
+    if (task.schedule_type === 'weekly') return `Weekly ${task.schedule_value || 'monday:03:00'}`
+    if (task.schedule_type === 'interval') return `Every ${task.schedule_value || '60'} minutes`
+    return task.schedule_type
+}
+
+function setDefaultScheduleValue() {
+    if (form.value.schedule_type === 'hourly') form.value.schedule_value = ''
+    if (form.value.schedule_type === 'daily') form.value.schedule_value = '03:00'
+    if (form.value.schedule_type === 'weekly') form.value.schedule_value = 'monday:03:00'
+    if (form.value.schedule_type === 'interval') form.value.schedule_value = '60'
+}
+
+async function createTask() {
+    if (!cellId.value) return
+
+    saving.value = true
+    error.value = ''
+
+    try {
+        const response = await fetch(`/cells/${cellId.value}/tasks`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-TOKEN': csrfToken(),
+            },
+            body: JSON.stringify(form.value),
+        })
+
+        if (!response.ok) {
+            const message = await readError(response)
+            error.value = message
+            showToast(message, 'error')
+            return
+        }
+
+        const task = await response.json()
+        taskList.value.unshift(task)
+        modalOpen.value = false
+        showToast('Task created.')
+    } finally {
+        saving.value = false
+    }
+}
+
+async function toggleTask(task: ServerTask) {
+    if (!cellId.value) return
+
+    const updated = {
+        name: task.name,
+        type: task.type,
+        command: task.command ?? '',
+        utility: task.utility ?? '',
+        schedule_type: task.schedule_type,
+        schedule_value: task.schedule_value ?? '',
+        enabled: !task.enabled,
+    }
+
+    actionLoading.value = task.id
+
+    try {
+        const response = await fetch(`/cells/${cellId.value}/tasks/${task.id}`, {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-TOKEN': csrfToken(),
+            },
+            body: JSON.stringify(updated),
+        })
+
+        if (!response.ok) {
+            showToast(await readError(response), 'error')
+            return
+        }
+
+        const saved = await response.json()
+        taskList.value = taskList.value.map(item => item.id === saved.id ? saved : item)
+        showToast(saved.enabled ? 'Task enabled.' : 'Task disabled.')
+    } finally {
+        actionLoading.value = null
+    }
+}
+
+async function runTask(task: ServerTask) {
+    if (!cellId.value) return
+
+    actionLoading.value = task.id
+
+    try {
+        const response = await fetch(`/cells/${cellId.value}/tasks/${task.id}/run`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-TOKEN': csrfToken(),
+            },
+        })
+
+        if (!response.ok) {
+            showToast(await readError(response), 'error')
+            return
+        }
+
+        showToast('Task dispatched.')
+    } finally {
+        actionLoading.value = null
+    }
+}
+
+async function deleteTask(task: ServerTask) {
+    if (!cellId.value) return
+
+    if (!confirm(`Delete "${task.name}"?`)) return
+
+    actionLoading.value = task.id
+
+    try {
+        const response = await fetch(`/cells/${cellId.value}/tasks/${task.id}`, {
+            method: 'DELETE',
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-TOKEN': csrfToken(),
+            },
+        })
+
+        if (!response.ok) {
+            showToast(await readError(response), 'error')
+            return
+        }
+
+        taskList.value = taskList.value.filter(item => item.id !== task.id)
+        showToast('Task deleted.')
+    } finally {
+        actionLoading.value = null
+    }
+}
+</script>
+
+<template>
+    <AppLayout
+        :context="'server'"
+        :active-cell="cell"
+        :active-cell-status="cell.status ?? 'offline'"
+    >
+        <Head :title="`${cell.name} Tasks`" />
+
+        <div class="min-h-screen bg-surface-dark text-white">
+            <main class="px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
+                <div class="mx-auto max-w-[1500px] space-y-5">
+                    <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
+                        <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                            <div>
+                                <h1 class="text-2xl font-black sm:text-3xl">
+                                    Scheduled Tasks
+                                </h1>
+
+                                <p class="mt-2 text-sm text-zinc-400">
+                                    Run commands, backups, restarts and utilities automatically.
+                                </p>
+                            </div>
+
+                            <button
+                                class="inline-flex items-center justify-center gap-2 rounded-button border border-hive bg-hive px-4 py-2 text-sm font-black text-white transition hover:bg-hive-light"
+                                @click="openModal"
+                            >
+                                <Plus class="size-4" />
+                                New Task
+                            </button>
+                        </div>
+                    </section>
+
+                    <div
+                        v-if="error"
+                        class="rounded-panel border border-status-danger/30 bg-status-danger/10 p-4 text-sm font-bold text-status-danger"
+                    >
+                        {{ error }}
+                    </div>
+
+                    <section class="grid gap-3 md:grid-cols-3">
+                        <div class="rounded-panel border border-zinc-800 bg-surface p-5">
+                            <div class="flex items-center gap-3">
+                                <CalendarClock class="size-5 text-hive" />
+                                <div>
+                                    <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                        Tasks
+                                    </div>
+                                    <div class="mt-1 text-2xl font-black text-white">
+                                        {{ taskList.length }}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="rounded-panel border border-zinc-800 bg-surface p-5">
+                            <div class="flex items-center gap-3">
+                                <CheckCircle class="size-5 text-status-success" />
+                                <div>
+                                    <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                        Enabled
+                                    </div>
+                                    <div class="mt-1 text-2xl font-black text-white">
+                                        {{ taskList.filter(task => task.enabled).length }}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="rounded-panel border border-zinc-800 bg-surface p-5">
+                            <div class="flex items-center gap-3">
+                                <Clock class="size-5 text-status-warning" />
+                                <div>
+                                    <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                        Next Run
+                                    </div>
+                                    <div class="mt-1 text-sm font-black text-white">
+                                        {{ formatDate(taskList.find(task => task.next_run_at)?.next_run_at) }}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
+                        <div v-if="taskList.length === 0" class="rounded-button border border-zinc-900 bg-[#0d0f11] p-10 text-center">
+                            <CalendarClock class="mx-auto size-10 text-zinc-700" />
+                            <h2 class="mt-4 text-lg font-black text-zinc-300">
+                                No tasks yet
+                            </h2>
+                            <p class="mt-2 text-sm text-zinc-500">
+                                Create your first scheduled task to automate this server.
+                            </p>
+                        </div>
+
+                        <div v-else class="space-y-3">
+                            <div
+                                v-for="task in taskList"
+                                :key="task.id"
+                                class="rounded-button border border-zinc-900 bg-[#0d0f11] p-4 transition hover:border-hive/40 hover:bg-surface-hover"
+                            >
+                                <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                                    <div class="min-w-0">
+                                        <div class="flex flex-wrap items-center gap-2">
+                                            <h3 class="truncate text-base font-black text-white">
+                                                {{ task.name }}
+                                            </h3>
+
+                                            <span class="rounded-full border border-hive/30 bg-hive/10 px-2 py-0.5 text-xs font-bold text-hive">
+                                                {{ taskTypeLabel(task.type) }}
+                                            </span>
+
+                                            <span
+                                                class="rounded-full px-2 py-0.5 text-xs font-bold"
+                                                :class="task.enabled
+                                                    ? 'border border-status-success/30 bg-status-success/10 text-status-success'
+                                                    : 'border border-zinc-700 bg-zinc-800 text-zinc-400'"
+                                            >
+                                                {{ task.enabled ? 'Enabled' : 'Disabled' }}
+                                            </span>
+                                        </div>
+
+                                        <div class="mt-2 flex flex-wrap gap-4 text-xs text-zinc-500">
+                                            <span>{{ scheduleLabel(task) }}</span>
+                                            <span>Last: {{ formatDate(task.last_run_at) }}</span>
+                                            <span>Next: {{ formatDate(task.next_run_at) }}</span>
+                                        </div>
+
+                                        <div
+                                            v-if="task.command"
+                                            class="mt-3 rounded-button border border-zinc-800 bg-black/40 px-3 py-2 font-mono text-xs text-zinc-400"
+                                        >
+                                            {{ task.command }}
+                                        </div>
+                                    </div>
+
+                                    <div class="flex flex-wrap gap-2">
+                                        <button
+                                            class="inline-flex items-center gap-2 rounded-button border border-zinc-800 bg-surface-light px-3 py-2 text-xs font-bold text-zinc-300 transition hover:border-hive hover:text-hive disabled:opacity-50"
+                                            :disabled="actionLoading === task.id"
+                                            @click="runTask(task)"
+                                        >
+                                            <Play class="size-4" />
+                                            Run
+                                        </button>
+
+                                        <button
+                                            class="inline-flex items-center gap-2 rounded-button border border-zinc-800 bg-surface-light px-3 py-2 text-xs font-bold text-zinc-300 transition hover:border-hive hover:text-hive disabled:opacity-50"
+                                            :disabled="actionLoading === task.id"
+                                            @click="toggleTask(task)"
+                                        >
+                                            {{ task.enabled ? 'Disable' : 'Enable' }}
+                                        </button>
+
+                                        <button
+                                            class="inline-flex items-center gap-2 rounded-button border border-status-danger/30 bg-status-danger/10 px-3 py-2 text-xs font-bold text-status-danger transition hover:border-status-danger disabled:opacity-50"
+                                            :disabled="actionLoading === task.id"
+                                            @click="deleteTask(task)"
+                                        >
+                                            <Trash class="size-4" />
+                                            Delete
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </main>
+        </div>
+
+        <div
+            v-if="modalOpen"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+        >
+            <div class="w-full max-w-2xl rounded-panel border border-zinc-800 bg-surface p-6">
+                <div class="flex items-center justify-between gap-4">
+                    <h2 class="text-xl font-black text-white">
+                        New Scheduled Task
+                    </h2>
+
+                    <button
+                        class="text-zinc-500 transition hover:text-white"
+                        @click="closeModal"
+                    >
+                        <X class="size-5" />
+                    </button>
+                </div>
+
+                <div class="mt-5 grid gap-4 md:grid-cols-2">
+                    <label class="space-y-2 md:col-span-2">
+                        <span class="text-sm font-bold text-zinc-400">Name</span>
+                        <input
+                            v-model="form.name"
+                            class="w-full rounded-button border border-zinc-800 bg-surface-light px-4 py-3 text-sm text-zinc-200 outline-none focus:border-hive"
+                            placeholder="Daily restart"
+                        />
+                    </label>
+
+                    <label class="space-y-2">
+                        <span class="text-sm font-bold text-zinc-400">Type</span>
+                        <select
+                            v-model="form.type"
+                            class="w-full rounded-button border border-zinc-800 bg-surface-light px-4 py-3 text-sm text-zinc-200 outline-none focus:border-hive"
+                        >
+                            <option value="command">Command</option>
+                            <option value="backup">Backup</option>
+                            <option value="restart">Restart</option>
+                            <option value="stop">Stop</option>
+                            <option value="start">Start</option>
+                            <option value="utility">Utility</option>
+                        </select>
+                    </label>
+
+                    <label class="space-y-2">
+                        <span class="text-sm font-bold text-zinc-400">Schedule</span>
+                        <select
+                            v-model="form.schedule_type"
+                            class="w-full rounded-button border border-zinc-800 bg-surface-light px-4 py-3 text-sm text-zinc-200 outline-none focus:border-hive"
+                            @change="setDefaultScheduleValue"
+                        >
+                            <option value="hourly">Hourly</option>
+                            <option value="daily">Daily</option>
+                            <option value="weekly">Weekly</option>
+                            <option value="interval">Every X minutes</option>
+                        </select>
+                    </label>
+
+                    <label
+                        v-if="form.schedule_type !== 'hourly'"
+                        class="space-y-2"
+                    >
+                        <span class="text-sm font-bold text-zinc-400">
+                            Schedule Value
+                        </span>
+                        <input
+                            v-model="form.schedule_value"
+                            class="w-full rounded-button border border-zinc-800 bg-surface-light px-4 py-3 font-mono text-sm text-zinc-200 outline-none focus:border-hive"
+                            placeholder="03:00"
+                        />
+                    </label>
+
+                    <label
+                        v-if="form.type === 'command'"
+                        class="space-y-2 md:col-span-2"
+                    >
+                        <span class="text-sm font-bold text-zinc-400">Command</span>
+                        <input
+                            v-model="form.command"
+                            class="w-full rounded-button border border-zinc-800 bg-surface-light px-4 py-3 font-mono text-sm text-zinc-200 outline-none focus:border-hive"
+                            placeholder="say Server restarting in 5 minutes"
+                        />
+                    </label>
+
+                    <label
+                        v-if="form.type === 'utility'"
+                        class="space-y-2 md:col-span-2"
+                    >
+                        <span class="text-sm font-bold text-zinc-400">Utility</span>
+                        <select
+                            v-model="form.utility"
+                            class="w-full rounded-button border border-zinc-800 bg-surface-light px-4 py-3 text-sm text-zinc-200 outline-none focus:border-hive"
+                        >
+                            <option value="">Select utility</option>
+                            <option value="reset-files">Reset files</option>
+                            <option value="reset-world">Reset world</option>
+                            <option value="repair-permissions">Repair permissions</option>
+                            <option value="clear-logs">Clear logs</option>
+                        </select>
+                    </label>
+
+                    <label class="flex items-center justify-between rounded-button border border-zinc-800 bg-surface-light px-4 py-3 md:col-span-2">
+                        <span class="text-sm font-bold text-zinc-300">
+                            Enabled
+                        </span>
+                        <input v-model="form.enabled" type="checkbox" class="accent-hive" />
+                    </label>
+                </div>
+
+                <div class="mt-6 flex justify-end gap-3">
+                    <button
+                        class="rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 transition hover:text-white"
+                        @click="closeModal"
+                    >
+                        Cancel
+                    </button>
+
+                    <button
+                        class="rounded-button border border-hive bg-hive px-4 py-2 text-sm font-black text-white transition hover:bg-hive-light disabled:opacity-50"
+                        :disabled="saving"
+                        @click="createTask"
+                    >
+                        {{ saving ? 'Creating...' : 'Create Task' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div
+            v-if="toastMessage"
+            class="fixed bottom-5 right-5 z-[60] rounded-button border px-5 py-3 text-sm font-bold shadow-[0_20px_70px_rgba(0,0,0,0.45)]"
+            :class="toastType === 'success'
+                ? 'border-status-success/40 bg-status-success/15 text-status-success'
+                : 'border-status-danger/40 bg-status-danger/15 text-status-danger'"
+        >
+            {{ toastMessage }}
+        </div>
+    </AppLayout>
+</template>
