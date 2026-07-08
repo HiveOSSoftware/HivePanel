@@ -12,10 +12,10 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('server_schedule_actions', function (Blueprint $table) {
-            $table->id();
+            $table->uuid('id')->primary();
 
-            $table->foreignId('server_schedule_id')
-                ->constrained()
+            $table->foreignUuid('server_schedule_id')
+                ->constrained('server_schedules')
                 ->cascadeOnDelete();
 
             $table->unsignedInteger('sort_order')->default(0);

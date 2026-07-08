@@ -12,7 +12,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('server_schedules', function (Blueprint $table) {
-            $table->id();
+            $table->uuid('id')->primary();
             $table->string('cell_id')->index();
 
             $table->string('name');

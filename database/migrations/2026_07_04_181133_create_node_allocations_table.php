@@ -12,9 +12,9 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('node_allocations', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('node_id')->constrained()->cascadeOnDelete();
-            $table->foreignId('cell_id')->nullable()->constrained()->nullOnDelete();
+            $table->uuid('id')->primary();
+            $table->foreignUuid('node_id')->constrained('nodes')->cascadeOnDelete();
+            $table->foreignUuid('cell_id')->nullable()->constrained('cells')->nullOnDelete();
 
             $table->string('ip');
             $table->unsignedInteger('port');

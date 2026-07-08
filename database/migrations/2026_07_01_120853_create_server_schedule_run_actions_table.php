@@ -12,9 +12,9 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('server_schedule_run_actions', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('server_schedule_run_id')->constrained()->cascadeOnDelete();
-            $table->foreignId('server_schedule_action_id')->nullable()->constrained()->nullOnDelete();
+            $table->uuid('id')->primary();
+            $table->foreignUuid('server_schedule_run_id')->constrained('server_schedule_runs')->cascadeOnDelete();
+            $table->foreignUuid('server_schedule_action_id')->nullable()->constrained('server_schedule_actions')->nullOnDelete();
 
             $table->unsignedInteger('sort_order')->default(0);
             $table->string('type');

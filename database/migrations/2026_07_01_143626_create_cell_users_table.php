@@ -9,13 +9,13 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('cell_users', function (Blueprint $table) {
-            $table->id();
+            $table->uuid('id')->primary();
 
             $table->foreignUuid('cell_id')
                 ->constrained('cells')
                 ->cascadeOnDelete();
 
-            $table->foreignId('user_id')
+            $table->foreignUuid('user_id')
                 ->constrained('users')
                 ->cascadeOnDelete();
 

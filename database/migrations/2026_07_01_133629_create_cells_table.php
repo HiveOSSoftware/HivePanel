@@ -18,7 +18,7 @@ return new class extends Migration
                 ->cascadeOnDelete();
 
             // Owner of the server.
-            $table->foreignId('owner_id')
+            $table->foreignUuid('owner_id')
                 ->nullable()
                 ->constrained('users')
                 ->nullOnDelete();
