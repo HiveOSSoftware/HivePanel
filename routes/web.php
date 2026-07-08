@@ -13,6 +13,8 @@ use App\Http\Controllers\Admin\AdminNodeAllocationController;
 // Combs
 use App\Http\Controllers\Admin\AdminCombController;
 use App\Http\Controllers\Admin\AdminCombImportController;
+// Settings
+use App\Http\Controllers\Admin\AdminSettingsController;
 
 // User Routes
 // Dashboard
@@ -90,6 +92,13 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('/{comb}/edit', [AdminCombController::class, 'edit'])->name('edit');
             Route::put('/{comb}', [AdminCombController::class, 'update'])->name('update');
         });
+
+        // Settings
+        Route::get('/settings', [AdminSettingsController::class, 'index'])->name('settings');
+        Route::patch('/settings/general', [AdminSettingsController::class, 'updateGeneral'])->name('settings.general.update');
+        Route::patch('/settings/mail', [AdminSettingsController::class, 'updateMail'])->name('settings.mail.update');
+        Route::patch('/settings/captcha', [AdminSettingsController::class, 'updateCaptcha'])->name('settings.captcha.update');
+        Route::patch('/settings/oauth', [AdminSettingsController::class, 'updateOAuth'])->name('settings.oauth.update');
     });
 
     // User Routes
