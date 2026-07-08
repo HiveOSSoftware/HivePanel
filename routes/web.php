@@ -15,6 +15,8 @@ use App\Http\Controllers\Admin\AdminCombController;
 use App\Http\Controllers\Admin\AdminCombImportController;
 // Settings
 use App\Http\Controllers\Admin\AdminSettingsController;
+// Users
+use App\Http\Controllers\Admin\AdminUserController;
 
 // User Routes
 // Dashboard
@@ -50,6 +52,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::prefix('nodes')->name('nodes.')->group(function () {
             Route::get('/', [AdminNodeController::class, 'index'])->name('index');
             Route::post('/', [AdminNodeController::class, 'store'])->name('store');
+            Route::get('/create', [AdminNodeController::class, 'create'])->name('create');
             Route::get('{node}', [AdminNodeController::class, 'show'])->name('show');
             Route::patch('{node}', [AdminNodeController::class, 'update'])->name('update');
             Route::delete('{node}', [AdminNodeController::class, 'destroy'])->name('destroy');
@@ -99,6 +102,14 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::patch('/settings/mail', [AdminSettingsController::class, 'updateMail'])->name('settings.mail.update');
         Route::patch('/settings/captcha', [AdminSettingsController::class, 'updateCaptcha'])->name('settings.captcha.update');
         Route::patch('/settings/oauth', [AdminSettingsController::class, 'updateOAuth'])->name('settings.oauth.update');
+
+        // Users
+        Route::prefix('users')->name('users.')->group(function () {
+            Route::get('/', [AdminUserController::class, 'index'])->name('index');
+            Route::get('/{user}', [AdminUserController::class, 'show'])->name('show');
+            Route::get('/{user}/edit', [AdminUserController::class, 'edit'])->name('edit');
+            Route::patch('/{user}', [AdminUserController::class, 'update'])->name('update');
+        });
     });
 
     // User Routes

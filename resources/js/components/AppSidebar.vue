@@ -117,8 +117,8 @@ const gameNavGroup = (cell: any): SidebarNavEntry | null => {
 }
 
 const dashboardNav: SidebarNavEntry[] = [
-    { title: 'Servers', href: '/dashboard', icon: Home },
-    { title: 'API Keys', href: '/servers', icon: LockIcon },
+    { title: 'Servers', href: '', icon: Home },
+    // { title: 'API Keys', href: '/servers', icon: LockIcon },
 ]
 
 const serverNav = (cell: any): SidebarNavEntry[] => {

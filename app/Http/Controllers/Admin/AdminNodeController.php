@@ -23,6 +23,11 @@ class AdminNodeController extends Controller
         ]);
     }
 
+    public function create()
+    {
+        return Inertia::render('Admin/Nodes/Create');
+    }
+
     public function show(Node $node)
     {
         $node->load('liveStat');
@@ -127,6 +132,7 @@ SERVICE;
 
         $node = Node::create([
             ...$data,
+            'api_token' => null,
             'fqdn' => $data['public_fqdn'],
             'port' => $data['daemon_port'],
             'is_active' => $data['is_active'] ?? true,
@@ -136,7 +142,7 @@ SERVICE;
             'node_id' => $node->id,
         ]);
 
-        return back();
+        return redirect()->route('admin.nodes.configuration', $node);
     }
 
     public function update(Node $node, Request $request, AuditLogger $audit)
@@ -258,9 +264,7 @@ SERVICE;
             'daemon_port' => ['required', 'integer', 'min:1', 'max:65535'],
             'sftp_port' => ['required', 'integer', 'min:1', 'max:65535'],
 
-            'api_token' => $creating
-                ? ['required', 'string', 'max:500']
-                : ['sometimes', 'nullable', 'string', 'max:500'],
+            'api_token' => ['sometimes', 'nullable', 'string', 'max:500'],
 
             'behind_proxy' => ['sometimes', 'boolean'],
             'maintenance_mode' => ['sometimes', 'boolean'],

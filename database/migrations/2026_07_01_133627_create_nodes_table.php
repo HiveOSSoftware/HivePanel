@@ -21,7 +21,7 @@ return new class extends Migration
             $table->string('fqdn');
             $table->unsignedInteger('port')->default(8080);
 
-            $table->text('api_token');
+            $table->text('api_token')->nullable();
 
             $table->boolean('is_active')->default(true);
             $table->json('metadata')->nullable();

@@ -2,6 +2,7 @@
 import AppLayout from '@/layouts/app/AppSidebarLayout.vue'
 import ConfirmHost from '@/components/ui/ConfirmHost.vue'
 import type { BreadcrumbItemType } from '@/types'
+import GlobalToasts from '@/components/ui/GlobalToasts.vue'
 
 type CellStatus = 'offline' | 'starting' | 'running' | 'stopping'
 
@@ -25,5 +26,6 @@ withDefaults(defineProps<Props>(), {
     >
         <slot />
         <ConfirmHost />
+        <GlobalToasts />
     </AppLayout>
 </template>
