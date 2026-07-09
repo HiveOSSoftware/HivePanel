@@ -305,7 +305,7 @@ function submitOAuth() {
                                             />
 
                                             <p class="mt-2 text-xs text-zinc-600">
-                                                Used later for the sidebar, login page, and emails.
+                                                Used for the sidebar, login page, and emails.
                                             </p>
 
                                             <p v-if="generalForm.errors.company_logo" class="mt-2 text-xs font-bold text-status-danger">

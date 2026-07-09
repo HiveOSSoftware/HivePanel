@@ -4,6 +4,7 @@ import { Head, Link, router } from '@inertiajs/vue3'
 import {
     Activity,
     ArrowLeft,
+    CpuIcon,
     HardDrive,
     Save,
     Server,
@@ -62,37 +63,41 @@ function save() {
         <div class="min-h-screen bg-surface-dark text-white">
             <main class="px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
                 <div class="mx-auto space-y-5">
-                    <section class="space-y-4">
-                        <div class="flex flex-wrap items-center gap-2 text-sm font-bold text-zinc-500">
-                            <Link href="/admin" class="hover:text-hive">Admin</Link>
-                            <span>›</span>
-                            <Link href="/admin/nodes" class="hover:text-hive">Nodes</Link>
-                            <span>›</span>
-                            <Link :href="`/admin/nodes/${node.id}`" class="hover:text-hive">
-                                {{ node.name }}
-                            </Link>
-                            <span>›</span>
-                            <span class="text-zinc-300">Settings</span>
-                        </div>
+                    <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
+                        <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                            <div class="flex items-center gap-3">
+                                <CpuIcon class="size-6 text-hive" />
 
-                        <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                            <div>
-                                <h1 class="text-3xl font-black tracking-tight">
-                                    Node Settings
-                                </h1>
+                                <div>
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <h1 class="text-2xl font-black sm:text-3xl">
+                                            {{ node.name }}
+                                        </h1>
 
-                                <p class="mt-2 text-sm text-zinc-400">
-                                    Configure connection details and usable resource limits.
-                                </p>
+                                        <span class="rounded-full border border-hive/30 bg-hive/10 px-2 py-0.5 text-xs font-bold text-hive">
+                                            {{ node.location }}
+                                        </span>
+
+                                        <span class="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-xs font-bold text-zinc-400">
+                                            {{ node.scheme }}
+                                        </span>
+                                    </div>
+
+                                    <p class="mt-2 font-mono text-sm text-zinc-500">
+                                        {{ node.fqdn }}
+                                    </p>
+                                </div>
                             </div>
 
-                            <Link
-                                :href="`/admin/nodes/${node.id}`"
-                                class="inline-flex items-center gap-2 rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 transition hover:border-hive hover:text-hive"
-                            >
-                                <ArrowLeft class="size-4" />
-                                Back to Node
-                            </Link>
+                            <div class="flex flex-wrap gap-2">
+                                <Link
+                                    href="/admin/nodes"
+                                    class="inline-flex items-center justify-center gap-2 rounded-button border border-zinc-800 bg-[#0d0f11] px-4 py-2 text-sm font-black text-zinc-300 transition hover:border-hive/40 hover:text-white"
+                                >
+                                    <ArrowLeft class="size-4" />
+                                    Back
+                                </Link>
+                            </div>
                         </div>
                     </section>
 
