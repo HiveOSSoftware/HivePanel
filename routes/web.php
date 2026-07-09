@@ -103,12 +103,12 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::prefix('settings')->name('admin.settings.')->group(function () {
             Route::get('/', [AdminSettingsController::class, 'index'])->name('index');
 
-            Route::put('/general', [AdminSettingsController::class, 'updateGeneral'])->name('general.update');
-            Route::put('/security', [AdminSettingsController::class, 'updateSecurity'])->name('security.update');
-            Route::put('/mail', [AdminSettingsController::class, 'updateMail'])->name('mail.update');
+            Route::patch('/general', [AdminSettingsController::class, 'updateGeneral'])->name('general.update');
+            Route::patch('/security', [AdminSettingsController::class, 'updateSecurity'])->name('security.update');
+            Route::patch('/mail', [AdminSettingsController::class, 'updateMail'])->name('mail.update');
             Route::post('/mail/test', [AdminSettingsController::class, 'testMail'])->name('mail.test');
-            Route::put('/captcha', [AdminSettingsController::class, 'updateCaptcha'])->name('captcha.update');
-            Route::put('/oauth', [AdminSettingsController::class, 'updateOAuth'])->name('oauth.update');
+            Route::patch('/captcha', [AdminSettingsController::class, 'updateCaptcha'])->name('captcha.update');
+            Route::patch('/oauth', [AdminSettingsController::class, 'updateOAuth'])->name('oauth.update');
         });
 
         // Users

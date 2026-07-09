@@ -20,21 +20,33 @@ declare module 'vite/client' {
     }
 }
 
-const appName = import.meta.env.VITE_APP_NAME || 'Laravel';
+let panelName = import.meta.env.VITE_APP_NAME || 'Hive Panel';
 
 createInertiaApp({
-    title: (title) => `${title} - ${appName}`,
-    resolve: (name) => resolvePageComponent(`./pages/${name}.vue`, import.meta.glob<DefineComponent>('./pages/**/*.vue')),
+    title: (title) => title ? `${title} - ${panelName}` : panelName,
+
+    resolve: (name) =>
+        resolvePageComponent(
+            `./pages/${name}.vue`,
+            import.meta.glob<DefineComponent>('./pages/**/*.vue'),
+        ),
+
     setup({ el, App, props, plugin }) {
-        createApp({ render: () => h(App, props) })
+        panelName =
+            (props.initialPage.props as any).appSettings?.name ?? 'Hive Panel'
+
+        createApp({
+            render: () => h(App, props),
+        })
             .use(plugin)
             .use(ZiggyVue)
-            .mount(el);
+            .mount(el)
     },
+
     progress: {
-        color: '#4B5563',
+        color: '#ff8a00',
     },
-});
+})
 
 // This will set light / dark mode on page load...
 initializeTheme();

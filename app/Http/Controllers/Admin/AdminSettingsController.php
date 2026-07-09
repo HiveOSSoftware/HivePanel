@@ -3,9 +3,13 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Mail\TestMail;
 use App\Models\AppSetting;
+use App\Support\AppSettings;
 use App\Models\OAuthProvider;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Config;
+use Illuminate\Support\Facades\Mail;
 use Inertia\Inertia;
 
 class AdminSettingsController extends Controller
@@ -21,22 +25,16 @@ class AdminSettingsController extends Controller
                     'default_language' => 'en',
                 ]),
 
-                'mail' => $this->setting('mail', [
-                    'host' => '',
-                    'port' => 587,
-                    'encryption' => 'tls',
-                    'username' => '',
-                    'password' => '',
-                    'from_address' => '',
-                    'from_name' => '',
+                'security' => $this->setting('security', [
+                    'allow_registration' => false,
+                    'require_email_verification' => false,
+                    'session_lifetime' => 120,
+                    'password_min_length' => 8,
                 ]),
 
-                'captcha' => $this->setting('captcha', [
-                    'enabled' => false,
-                    'provider' => 'turnstile',
-                    'site_key' => '',
-                    'secret_key' => '',
-                ]),
+                'mail' => $this->safeMailSettings(),
+
+                'captcha' => $this->safeCaptchaSettings(),
             ],
 
             'oauthProviders' => $this->oauthProviders(),
@@ -54,7 +52,21 @@ class AdminSettingsController extends Controller
 
         $this->setSetting('general', $data);
 
-        return back();
+        return back()->with('success', 'General settings updated.');
+    }
+
+    public function updateSecurity(Request $request)
+    {
+        $data = $request->validate([
+            'allow_registration' => ['boolean'],
+            'require_email_verification' => ['boolean'],
+            'session_lifetime' => ['required', 'integer', 'min:5', 'max:10080'],
+            'password_min_length' => ['required', 'integer', 'min:8', 'max:128'],
+        ]);
+
+        $this->setSetting('security', $data);
+
+        return back()->with('success', 'Security settings updated.');
     }
 
     public function updateMail(Request $request)
@@ -77,7 +89,29 @@ class AdminSettingsController extends Controller
 
         $this->setSetting('mail', $data);
 
-        return back();
+        return back()->with('success', 'Mail settings updated.');
+    }
+
+    public function testMail(Request $request)
+    {
+        $data = $request->validate([
+            'email' => ['required', 'email', 'max:255'],
+        ]);
+
+        $mail = $this->setting('mail', []);
+
+        Config::set('mail.default', 'smtp');
+        Config::set('mail.mailers.smtp.host', $mail['host'] ?? '');
+        Config::set('mail.mailers.smtp.port', $mail['port'] ?? 587);
+        Config::set('mail.mailers.smtp.encryption', ($mail['encryption'] ?? 'tls') === 'none' ? null : $mail['encryption']);
+        Config::set('mail.mailers.smtp.username', $mail['username'] ?? null);
+        Config::set('mail.mailers.smtp.password', $mail['password'] ?? null);
+        Config::set('mail.from.address', $mail['from_address'] ?? config('mail.from.address'));
+        Config::set('mail.from.name', $mail['from_name'] ?? 'HivePanel');
+
+        Mail::to($data['email'])->send(new TestMail());
+
+        return back()->with('success', 'Test email sent.');
     }
 
     public function updateCaptcha(Request $request)
@@ -97,48 +131,42 @@ class AdminSettingsController extends Controller
 
         $this->setSetting('captcha', $data);
 
-        return back();
+        return back()->with('success', 'Captcha settings updated.');
     }
 
     public function updateOAuth(Request $request)
     {
+        $providers = ['discord', 'google', 'github'];
+
         $data = $request->validate([
             'providers' => ['required', 'array'],
-
-            'providers.discord.enabled' => ['boolean'],
-            'providers.discord.client_id' => ['nullable', 'string', 'max:255'],
-            'providers.discord.client_secret' => ['nullable', 'string', 'max:255'],
-            'providers.discord.redirect_url' => ['nullable', 'url', 'max:2048'],
-
-            'providers.google.enabled' => ['boolean'],
-            'providers.google.client_id' => ['nullable', 'string', 'max:255'],
-            'providers.google.client_secret' => ['nullable', 'string', 'max:255'],
-            'providers.google.redirect_url' => ['nullable', 'url', 'max:2048'],
-
-            'providers.github.enabled' => ['boolean'],
-            'providers.github.client_id' => ['nullable', 'string', 'max:255'],
-            'providers.github.client_secret' => ['nullable', 'string', 'max:255'],
-            'providers.github.redirect_url' => ['nullable', 'url', 'max:2048'],
         ]);
 
-        foreach (['discord', 'google', 'github'] as $provider) {
-            $payload = $data['providers'][$provider] ?? [];
+        foreach ($providers as $provider) {
+            $payload = $request->input("providers.{$provider}", []);
+
+            $validated = validator($payload, [
+                'enabled' => ['boolean'],
+                'client_id' => ['nullable', 'string', 'max:255'],
+                'client_secret' => ['nullable', 'string', 'max:255'],
+                'redirect_url' => ['nullable', 'url', 'max:2048'],
+            ])->validate();
 
             $existing = OAuthProvider::firstOrCreate([
                 'provider' => $provider,
             ]);
 
             $existing->update([
-                'enabled' => (bool) ($payload['enabled'] ?? false),
-                'client_id' => $payload['client_id'] ?? null,
-                'client_secret' => filled($payload['client_secret'] ?? null)
-                    ? $payload['client_secret']
+                'enabled' => (bool) ($validated['enabled'] ?? false),
+                'client_id' => $validated['client_id'] ?? null,
+                'client_secret' => filled($validated['client_secret'] ?? null)
+                    ? $validated['client_secret']
                     : $existing->client_secret,
-                'redirect_url' => $payload['redirect_url'] ?? null,
+                'redirect_url' => $validated['redirect_url'] ?? null,
             ]);
         }
 
-        return back();
+        return back()->with('success', 'OAuth settings updated.');
     }
 
     private function setting(string $key, array $default = []): array
@@ -152,6 +180,39 @@ class AdminSettingsController extends Controller
             ['key' => $key],
             ['value' => $value],
         );
+
+        AppSettings::clear($key);
+    }
+
+    private function safeMailSettings(): array
+    {
+        $mail = $this->setting('mail', [
+            'host' => '',
+            'port' => 587,
+            'encryption' => 'tls',
+            'username' => '',
+            'password' => '',
+            'from_address' => '',
+            'from_name' => '',
+        ]);
+
+        $mail['password'] = '';
+
+        return $mail;
+    }
+
+    private function safeCaptchaSettings(): array
+    {
+        $captcha = $this->setting('captcha', [
+            'enabled' => false,
+            'provider' => 'turnstile',
+            'site_key' => '',
+            'secret_key' => '',
+        ]);
+
+        $captcha['secret_key'] = '';
+
+        return $captcha;
     }
 
     private function oauthProviders(): array

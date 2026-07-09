@@ -3,13 +3,13 @@ import AppLayout from '@/layouts/AppLayout.vue'
 import { Head, useForm } from '@inertiajs/vue3'
 import {
     Building2,
-    Check,
     Globe2,
     Image,
     KeyRound,
     Lock,
     Mail,
     Save,
+    Send,
     Settings,
     ShieldCheck,
 } from 'lucide-vue-next'
@@ -21,6 +21,12 @@ type SettingsPayload = {
         company_logo?: string | null
         require_2fa: 'not_required' | 'admin_only' | 'all_users'
         default_language: string
+    }
+    security: {
+        allow_registration: boolean
+        require_email_verification: boolean
+        session_lifetime: number
+        password_min_length: number
     }
     mail: {
         host?: string | null
@@ -54,6 +60,7 @@ const props = defineProps<{
 
 const tabs = [
     { key: 'general', label: 'General', icon: Building2 },
+    { key: 'security', label: 'Security', icon: Lock },
     { key: 'mail', label: 'Mail', icon: Mail },
     { key: 'captcha', label: 'Captcha', icon: ShieldCheck },
     { key: 'oauth', label: 'Social Providers', icon: KeyRound },
@@ -68,6 +75,13 @@ const generalForm = useForm({
     default_language: props.settings.general.default_language ?? 'en',
 })
 
+const securityForm = useForm({
+    allow_registration: props.settings.security?.allow_registration ?? false,
+    require_email_verification: props.settings.security?.require_email_verification ?? false,
+    session_lifetime: props.settings.security?.session_lifetime ?? 120,
+    password_min_length: props.settings.security?.password_min_length ?? 8,
+})
+
 const mailForm = useForm({
     host: props.settings.mail.host ?? '',
     port: props.settings.mail.port ?? 587,
@@ -76,6 +90,10 @@ const mailForm = useForm({
     password: '',
     from_address: props.settings.mail.from_address ?? '',
     from_name: props.settings.mail.from_name ?? '',
+})
+
+const testMailForm = useForm({
+    email: '',
 })
 
 const captchaForm = useForm({
@@ -130,11 +148,26 @@ function submitGeneral() {
     })
 }
 
+function submitSecurity() {
+    securityForm.patch('/admin/settings/security', {
+        preserveScroll: true,
+    })
+}
+
 function submitMail() {
     mailForm.patch('/admin/settings/mail', {
         preserveScroll: true,
         onSuccess: () => {
             mailForm.password = ''
+        },
+    })
+}
+
+function sendTestMail() {
+    testMailForm.post('/admin/settings/mail/test', {
+        preserveScroll: true,
+        onSuccess: () => {
+            testMailForm.email = ''
         },
     })
 }
@@ -167,21 +200,18 @@ function submitOAuth() {
         <div class="min-h-screen bg-surface-dark text-white">
             <main class="px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
                 <div class="mx-auto space-y-5">
-                    <section class="overflow-hidden rounded-panel border border-hive/10 bg-surface">
-                        <div class="relative p-5 sm:p-6">
-                            <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,196,0,0.12),transparent_35%)]" />
-
-                            <div class="relative flex items-center gap-3">
-                                <div class="rounded-xl border border-hive/20 bg-hive/10 p-3">
-                                    <Settings class="size-6 text-hive" />
-                                </div>
+                    <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
+                        <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                            <div class="flex items-center gap-3">
+                                <Settings class="size-6 text-hive" />
 
                                 <div>
                                     <h1 class="text-2xl font-black sm:text-3xl">
                                         Settings
                                     </h1>
-                                    <p class="mt-1 text-sm text-zinc-400">
-                                        Configure branding, mail, captcha, and social authentication.
+
+                                    <p class="mt-2 text-sm text-zinc-400">
+                                        Configure branding, security, mail, captcha, and social authentication.
                                     </p>
                                 </div>
                             </div>
@@ -207,15 +237,13 @@ function submitOAuth() {
 
                         <div class="space-y-5">
                             <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
-                                <div class="flex items-center justify-between gap-3">
-                                    <div>
-                                        <h2 class="text-lg font-black text-white">
-                                            {{ activeTabLabel }}
-                                        </h2>
-                                        <p class="mt-1 text-sm text-zinc-500">
-                                            Update {{ activeTabLabel.toLowerCase() }} settings.
-                                        </p>
-                                    </div>
+                                <div>
+                                    <h2 class="text-lg font-black text-white">
+                                        {{ activeTabLabel }}
+                                    </h2>
+                                    <p class="mt-1 text-sm text-zinc-500">
+                                        Update {{ activeTabLabel.toLowerCase() }} settings.
+                                    </p>
                                 </div>
                             </section>
 
@@ -300,6 +328,10 @@ function submitOAuth() {
                                                 <option value="all_users">All Users</option>
                                             </select>
 
+                                            <p class="mt-2 text-xs text-zinc-600">
+                                                This controls who must enable 2FA before using the panel.
+                                            </p>
+
                                             <p v-if="generalForm.errors.require_2fa" class="mt-2 text-xs font-bold text-status-danger">
                                                 {{ generalForm.errors.require_2fa }}
                                             </p>
@@ -320,103 +352,90 @@ function submitOAuth() {
                             </form>
 
                             <form
-                                v-if="activeTab === 'mail'"
+                                v-if="activeTab === 'security'"
                                 class="space-y-5"
-                                @submit.prevent="submitMail"
+                                @submit.prevent="submitSecurity"
                             >
                                 <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
-                                    <div class="grid gap-5 lg:grid-cols-2">
-                                        <div>
-                                            <label class="text-xs font-black uppercase tracking-wide text-zinc-500">
-                                                SMTP Host
-                                            </label>
+                                    <div class="space-y-4">
+                                        <label class="flex cursor-pointer items-center justify-between rounded-button border border-zinc-900 bg-[#0d0f11] p-4">
+                                            <div>
+                                                <div class="font-black text-white">
+                                                    Allow Registration
+                                                </div>
+                                                <div class="text-sm text-zinc-500">
+                                                    Allow new users to create accounts without being created by an admin.
+                                                </div>
+                                            </div>
 
                                             <input
-                                                v-model="mailForm.host"
-                                                type="text"
-                                                class="mt-2 w-full rounded-button border border-zinc-800 bg-[#0d0f11] px-3 py-2 text-sm font-bold text-white outline-none transition focus:border-hive/50"
-                                                placeholder="smtp.mailgun.org"
+                                                v-model="securityForm.allow_registration"
+                                                type="checkbox"
+                                                class="size-5 rounded border-zinc-700 bg-black text-hive focus:ring-hive"
                                             />
-                                        </div>
+                                        </label>
 
+                                        <label class="flex cursor-pointer items-center justify-between rounded-button border border-zinc-900 bg-[#0d0f11] p-4">
+                                            <div>
+                                                <div class="font-black text-white">
+                                                    Require Email Verification
+                                                </div>
+                                                <div class="text-sm text-zinc-500">
+                                                    Users must verify their email address before accessing the panel.
+                                                </div>
+                                            </div>
+
+                                            <input
+                                                v-model="securityForm.require_email_verification"
+                                                type="checkbox"
+                                                class="size-5 rounded border-zinc-700 bg-black text-hive focus:ring-hive"
+                                            />
+                                        </label>
+                                    </div>
+
+                                    <div class="mt-5 grid gap-5 lg:grid-cols-2">
                                         <div>
                                             <label class="text-xs font-black uppercase tracking-wide text-zinc-500">
-                                                SMTP Port
+                                                Session Lifetime
                                             </label>
 
                                             <input
-                                                v-model="mailForm.port"
+                                                v-model="securityForm.session_lifetime"
                                                 type="number"
+                                                min="5"
+                                                max="10080"
                                                 class="mt-2 w-full rounded-button border border-zinc-800 bg-[#0d0f11] px-3 py-2 text-sm font-bold text-white outline-none transition focus:border-hive/50"
-                                                placeholder="587"
                                             />
+
+                                            <p class="mt-2 text-xs text-zinc-600">
+                                                Session lifetime in minutes. Max: 10080 minutes.
+                                            </p>
+
+                                            <p v-if="securityForm.errors.session_lifetime" class="mt-2 text-xs font-bold text-status-danger">
+                                                {{ securityForm.errors.session_lifetime }}
+                                            </p>
                                         </div>
 
                                         <div>
                                             <label class="text-xs font-black uppercase tracking-wide text-zinc-500">
-                                                Encryption
-                                            </label>
-
-                                            <select
-                                                v-model="mailForm.encryption"
-                                                class="mt-2 w-full rounded-button border border-zinc-800 bg-[#0d0f11] px-3 py-2 text-sm font-bold text-white outline-none transition focus:border-hive/50"
-                                            >
-                                                <option value="none">None</option>
-                                                <option value="tls">TLS</option>
-                                                <option value="ssl">SSL</option>
-                                            </select>
-                                        </div>
-
-                                        <div>
-                                            <label class="text-xs font-black uppercase tracking-wide text-zinc-500">
-                                                Username
+                                                Minimum Password Length
                                             </label>
 
                                             <input
-                                                v-model="mailForm.username"
-                                                type="text"
+                                                v-model="securityForm.password_min_length"
+                                                type="number"
+                                                min="8"
+                                                max="128"
                                                 class="mt-2 w-full rounded-button border border-zinc-800 bg-[#0d0f11] px-3 py-2 text-sm font-bold text-white outline-none transition focus:border-hive/50"
-                                                placeholder="Optional"
                                             />
-                                        </div>
 
-                                        <div>
-                                            <label class="text-xs font-black uppercase tracking-wide text-zinc-500">
-                                                Password
-                                            </label>
+                                            <p class="mt-2 text-xs text-zinc-600">
+                                                Used for local account password validation.
+                                            </p>
 
-                                            <input
-                                                v-model="mailForm.password"
-                                                type="password"
-                                                class="mt-2 w-full rounded-button border border-zinc-800 bg-[#0d0f11] px-3 py-2 text-sm font-bold text-white outline-none transition focus:border-hive/50"
-                                                placeholder="Leave blank to keep existing password"
-                                            />
-                                        </div>
-
-                                        <div>
-                                            <label class="text-xs font-black uppercase tracking-wide text-zinc-500">
-                                                Mail From Address
-                                            </label>
-
-                                            <input
-                                                v-model="mailForm.from_address"
-                                                type="email"
-                                                class="mt-2 w-full rounded-button border border-zinc-800 bg-[#0d0f11] px-3 py-2 text-sm font-bold text-white outline-none transition focus:border-hive/50"
-                                                placeholder="noreply@example.com"
-                                            />
-                                        </div>
-
-                                        <div class="lg:col-span-2">
-                                            <label class="text-xs font-black uppercase tracking-wide text-zinc-500">
-                                                Mail From Name
-                                            </label>
-
-                                            <input
-                                                v-model="mailForm.from_name"
-                                                type="text"
-                                                class="mt-2 w-full rounded-button border border-zinc-800 bg-[#0d0f11] px-3 py-2 text-sm font-bold text-white outline-none transition focus:border-hive/50"
-                                                placeholder="HivePanel"
-                                            />
+                                            <p v-if="securityForm.errors.password_min_length" class="mt-2 text-xs font-bold text-status-danger">
+                                                {{ securityForm.errors.password_min_length }}
+                                            </p>
                                         </div>
                                     </div>
                                 </section>
@@ -425,13 +444,175 @@ function submitOAuth() {
                                     <button
                                         type="submit"
                                         class="inline-flex items-center gap-2 rounded-button bg-hive px-4 py-2 text-sm font-black text-black transition hover:bg-hive/90 disabled:opacity-50"
-                                        :disabled="mailForm.processing"
+                                        :disabled="securityForm.processing"
                                     >
                                         <Save class="size-4" />
-                                        Save Mail Settings
+                                        Save Security Settings
                                     </button>
                                 </div>
                             </form>
+
+                            <div
+                                v-if="activeTab === 'mail'"
+                                class="space-y-5"
+                            >
+                                <form
+                                    class="space-y-5"
+                                    @submit.prevent="submitMail"
+                                >
+                                    <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
+                                        <div class="grid gap-5 lg:grid-cols-2">
+                                            <div>
+                                                <label class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                                    SMTP Host
+                                                </label>
+
+                                                <input
+                                                    v-model="mailForm.host"
+                                                    type="text"
+                                                    class="mt-2 w-full rounded-button border border-zinc-800 bg-[#0d0f11] px-3 py-2 text-sm font-bold text-white outline-none transition focus:border-hive/50"
+                                                    placeholder="smtp.mailgun.org"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                                    SMTP Port
+                                                </label>
+
+                                                <input
+                                                    v-model="mailForm.port"
+                                                    type="number"
+                                                    class="mt-2 w-full rounded-button border border-zinc-800 bg-[#0d0f11] px-3 py-2 text-sm font-bold text-white outline-none transition focus:border-hive/50"
+                                                    placeholder="587"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                                    Encryption
+                                                </label>
+
+                                                <select
+                                                    v-model="mailForm.encryption"
+                                                    class="mt-2 w-full rounded-button border border-zinc-800 bg-[#0d0f11] px-3 py-2 text-sm font-bold text-white outline-none transition focus:border-hive/50"
+                                                >
+                                                    <option value="none">None</option>
+                                                    <option value="tls">TLS</option>
+                                                    <option value="ssl">SSL</option>
+                                                </select>
+                                            </div>
+
+                                            <div>
+                                                <label class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                                    Username
+                                                </label>
+
+                                                <input
+                                                    v-model="mailForm.username"
+                                                    type="text"
+                                                    class="mt-2 w-full rounded-button border border-zinc-800 bg-[#0d0f11] px-3 py-2 text-sm font-bold text-white outline-none transition focus:border-hive/50"
+                                                    placeholder="Optional"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                                    Password
+                                                </label>
+
+                                                <input
+                                                    v-model="mailForm.password"
+                                                    type="password"
+                                                    class="mt-2 w-full rounded-button border border-zinc-800 bg-[#0d0f11] px-3 py-2 text-sm font-bold text-white outline-none transition focus:border-hive/50"
+                                                    placeholder="Leave blank to keep existing password"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                                    Mail From Address
+                                                </label>
+
+                                                <input
+                                                    v-model="mailForm.from_address"
+                                                    type="email"
+                                                    class="mt-2 w-full rounded-button border border-zinc-800 bg-[#0d0f11] px-3 py-2 text-sm font-bold text-white outline-none transition focus:border-hive/50"
+                                                    placeholder="noreply@example.com"
+                                                />
+                                            </div>
+
+                                            <div class="lg:col-span-2">
+                                                <label class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                                    Mail From Name
+                                                </label>
+
+                                                <input
+                                                    v-model="mailForm.from_name"
+                                                    type="text"
+                                                    class="mt-2 w-full rounded-button border border-zinc-800 bg-[#0d0f11] px-3 py-2 text-sm font-bold text-white outline-none transition focus:border-hive/50"
+                                                    placeholder="HivePanel"
+                                                />
+                                            </div>
+                                        </div>
+                                    </section>
+
+                                    <div class="flex justify-end">
+                                        <button
+                                            type="submit"
+                                            class="inline-flex items-center gap-2 rounded-button bg-hive px-4 py-2 text-sm font-black text-black transition hover:bg-hive/90 disabled:opacity-50"
+                                            :disabled="mailForm.processing"
+                                        >
+                                            <Save class="size-4" />
+                                            Save Mail Settings
+                                        </button>
+                                    </div>
+                                </form>
+
+                                <form
+                                    class="space-y-5"
+                                    @submit.prevent="sendTestMail"
+                                >
+                                    <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
+                                        <div>
+                                            <h3 class="text-lg font-black text-white">
+                                                Send Test Email
+                                            </h3>
+                                            <p class="mt-1 text-sm text-zinc-500">
+                                                Send a test email using the currently saved SMTP settings.
+                                            </p>
+                                        </div>
+
+                                        <div class="mt-5">
+                                            <label class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                                Recipient Email
+                                            </label>
+
+                                            <input
+                                                v-model="testMailForm.email"
+                                                type="email"
+                                                class="mt-2 w-full rounded-button border border-zinc-800 bg-[#0d0f11] px-3 py-2 text-sm font-bold text-white outline-none transition focus:border-hive/50"
+                                                placeholder="you@example.com"
+                                            />
+
+                                            <p v-if="testMailForm.errors.email" class="mt-2 text-xs font-bold text-status-danger">
+                                                {{ testMailForm.errors.email }}
+                                            </p>
+                                        </div>
+                                    </section>
+
+                                    <div class="flex justify-end">
+                                        <button
+                                            type="submit"
+                                            class="inline-flex items-center gap-2 rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-black text-white transition hover:border-hive/50 disabled:opacity-50"
+                                            :disabled="testMailForm.processing"
+                                        >
+                                            <Send class="size-4" />
+                                            Send Test Email
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
 
                             <form
                                 v-if="activeTab === 'captcha'"
