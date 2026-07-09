@@ -5,6 +5,7 @@ import { Head, Link } from '@inertiajs/vue3'
 import {
     Activity,
     ArrowLeft,
+    CpuIcon,
     HardDrive,
     Info,
     Server,
@@ -108,51 +109,41 @@ onUnmounted(() => {
         <div class="min-h-screen bg-surface-dark text-white">
             <main class="px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
                 <div class="mx-auto space-y-5">
-                    <section class="space-y-4">
-                        <div class="flex flex-wrap items-center gap-2 text-sm font-bold text-zinc-500">
-                            <Link href="/admin" class="hover:text-hive">Admin</Link>
-                            <span>›</span>
-                            <Link href="/admin/nodes" class="hover:text-hive">Nodes</Link>
-                            <span>›</span>
-                            <span class="text-zinc-300">{{ node.name }}</span>
-                        </div>
+                    <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
+                        <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                            <div class="flex items-center gap-3">
+                                <CpuIcon class="size-6 text-hive" />
 
-                        <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                            <div>
-                                <div class="flex flex-wrap items-center gap-3">
-                                    <h1 class="text-3xl font-black tracking-tight">
-                                        {{ node.name }}
-                                    </h1>
+                                <div>
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <h1 class="text-2xl font-black sm:text-3xl">
+                                            {{ node.name }}
+                                        </h1>
 
-                                    <span
-                                        class="rounded-full border px-3 py-1 text-xs font-black"
-                                        :class="isOnline
-                                            ? 'border-status-success/30 bg-status-success/10 text-status-success'
-                                            : 'border-zinc-700 bg-zinc-800 text-zinc-400'"
-                                    >
-                                        {{ workerStatusLabel }}
-                                    </span>
+                                        <span class="rounded-full border border-hive/30 bg-hive/10 px-2 py-0.5 text-xs font-bold text-hive">
+                                            {{ node.location }}
+                                        </span>
 
-                                    <span
-                                        v-if="node.maintenance_mode"
-                                        class="rounded-full border border-status-warning/30 bg-status-warning/10 px-3 py-1 text-xs font-black text-status-warning"
-                                    >
-                                        Maintenance
-                                    </span>
+                                        <span class="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-xs font-bold text-zinc-400">
+                                            {{ node.scheme }}
+                                        </span>
+                                    </div>
+
+                                    <p class="mt-2 font-mono text-sm text-zinc-500">
+                                        {{ node.fqdn }}
+                                    </p>
                                 </div>
-
-                                <p class="mt-2 text-sm text-zinc-400">
-                                    {{ node.worker_hostname || 'Worker not connected yet' }}
-                                </p>
                             </div>
 
-                            <Link
-                                href="/admin/nodes"
-                                class="inline-flex items-center gap-2 rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 transition hover:border-hive hover:text-hive"
-                            >
-                                <ArrowLeft class="size-4" />
-                                Back to Nodes
-                            </Link>
+                            <div class="flex flex-wrap gap-2">
+                                <Link
+                                    href="/admin/nodes"
+                                    class="inline-flex items-center justify-center gap-2 rounded-button border border-zinc-800 bg-[#0d0f11] px-4 py-2 text-sm font-black text-zinc-300 transition hover:border-hive/40 hover:text-white"
+                                >
+                                    <ArrowLeft class="size-4" />
+                                    Back
+                                </Link>
+                            </div>
                         </div>
                     </section>
 
@@ -186,10 +177,10 @@ onUnmounted(() => {
                                 </span>
                             </Link>
 
-                            <Link :href="`/admin/nodes/${node.id}/servers`" class="rounded-button px-4 pt-3 pb-2 text-sm font-bold text-zinc-400 transition hover:bg-surface-light hover:text-white">
+                            <Link :href="`/admin/nodes/${node.id}/cells`" class="rounded-button px-4 pt-3 pb-2 text-sm font-bold text-zinc-400 transition hover:bg-surface-light hover:text-white">
                                 <span class="inline-flex items-center gap-2">
                                     <Server class="size-4" />
-                                    Servers
+                                    Cells
                                 </span>
                             </Link>
                         </div>

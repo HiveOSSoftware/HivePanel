@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import AppLayout from '@/layouts/AppLayout.vue'
 import { Head, Link } from '@inertiajs/vue3'
-import { Plus, Server } from 'lucide-vue-next'
+import { CpuIcon, Plus, Server } from 'lucide-vue-next'
 
 type NodeRecord = {
     id: string
@@ -35,7 +35,7 @@ function formatDate(value?: string) {
                     <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
                         <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                             <div class="flex items-center gap-3">
-                                <Server class="size-6 text-hive" />
+                                <CpuIcon class="size-6 text-hive" />
 
                                 <div>
                                     <h1 class="text-2xl font-black sm:text-3xl">
@@ -50,7 +50,7 @@ function formatDate(value?: string) {
 
                             <Link
                                 href="/admin/nodes/create"
-                                class="inline-flex items-center justify-center gap-2 rounded-button border border-hive bg-hive px-4 py-2 text-sm font-black text-white transition hover:bg-hive-light"
+                                class="inline-flex items-center justify-center gap-2 rounded-button border border-hive bg-hive px-4 py-2 text-sm font-black text-black transition hover:bg-hive-light"
                             >
                                 <Plus class="size-4" />
                                 New Node

@@ -64,6 +64,12 @@ class AdminNodeController extends Controller
         $panelUrl = rtrim(config('app.url'), '/');
         $registrationToken = session('registration_token');
 
+        $installScriptUrl = "{$panelUrl}/install/worker.sh";
+
+        $oneClickCommand = $registrationToken
+            ? "curl -fsSL {$installScriptUrl} | sudo bash -s -- --panel-url {$panelUrl} --token {$registrationToken}"
+            : "Generate a registration token first.";
+
         $workerYaml = <<<YAML
 panel:
   url: "{$panelUrl}"
@@ -115,6 +121,8 @@ SERVICE;
             'registrationToken' => $registrationToken,
             'workerYaml' => $workerYaml,
             'systemdService' => $systemdService,
+            'installScriptUrl' => $installScriptUrl,
+            'oneClickCommand' => $oneClickCommand,
             'commands' => [
                 'sudo mkdir -p /etc/hivepanel /var/lib/hivepanel/cells /var/lib/hivepanel/backups',
                 'sudo nano /etc/hivepanel/worker.yml',

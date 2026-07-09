@@ -172,10 +172,10 @@ function formatDate(value?: string) {
                                 </span>
                             </Link>
 
-                            <Link :href="`/admin/nodes/${node.id}/servers`" class="rounded-button px-4 pt-3 pb-2 text-sm font-bold text-zinc-400 transition hover:bg-surface-light hover:text-white">
+                            <Link :href="`/admin/nodes/${node.id}/cells`" class="rounded-button px-4 pt-3 pb-2 text-sm font-bold text-zinc-400 transition hover:bg-surface-light hover:text-white">
                                 <span class="inline-flex items-center gap-2">
                                     <Server class="size-4" />
-                                    Servers
+                                    Cells
                                 </span>
                             </Link>
                         </div>

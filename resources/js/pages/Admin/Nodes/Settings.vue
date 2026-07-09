@@ -139,12 +139,12 @@ function save() {
                             </Link>
 
                             <Link
-                                :href="`/admin/nodes/${node.id}/servers`"
+                                :href="`/admin/nodes/${node.id}/cells`"
                                 class="rounded-button px-4 py-3 text-sm font-bold text-zinc-400 transition hover:bg-surface-light hover:text-white"
                             >
                                 <span class="inline-flex items-center gap-2">
                                     <Server class="size-4" />
-                                    Servers
+                                    Cells
                                 </span>
                             </Link>
                         </div>
