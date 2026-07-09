@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import AppLayout from '@/layouts/AppLayout.vue'
 import { Head, Link, router } from '@inertiajs/vue3'
-import { ArrowLeft, Box, Trash2 } from 'lucide-vue-next'
+import { ArrowLeft, Box, Trash2, PencilIcon } from 'lucide-vue-next'
 import { computed } from 'vue'
 
 const props = defineProps<{
@@ -74,7 +74,7 @@ function destroyComb() {
                                     :href="`/admin/combs/${comb.id}/edit`"
                                     class="inline-flex items-center justify-center gap-2 rounded-button border border-zinc-800 bg-[#0d0f11] px-4 py-2 text-sm font-black text-zinc-300 transition hover:border-hive/40 hover:text-white"
                                 >
-                                    <Pencil class="size-4" />
+                                    <PencilIcon class="size-4" />
                                     Edit
                                 </Link>
 

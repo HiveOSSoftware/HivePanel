@@ -11,6 +11,7 @@ import {
     Check,
     ChevronLeft,
     ChevronRight,
+    CpuIcon,
     Database,
     Container,
     Info,
@@ -76,7 +77,7 @@ const form = useForm({
     backup_limit: null as number | null,
     backup_storage_mb: null as number | null,
 
-    docker_image: 'ghcr.io/pterodactyl/yolks:java_21',
+    docker_image: 'hivepanel/java:25',
     startup_command: 'java -Xms128M -XX:MaxRAMPercentage=95.0 -jar {{SERVER_JARFILE}}',
 
     variables: {
@@ -250,29 +251,28 @@ function submit() {
         <div class="min-h-screen bg-surface-dark text-white">
             <main class="px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
                 <div class="mx-auto space-y-5">
-                    <section class="space-y-4">
-                        <div class="flex flex-wrap items-center gap-2 text-sm font-bold text-zinc-500">
-                            <Link href="/admin" class="hover:text-hive">Admin</Link>
-                            <span>›</span>
-                            <Link href="/admin/cells" class="hover:text-hive">Cells</Link>
-                            <span>›</span>
-                            <span class="text-zinc-300">Create</span>
-                        </div>
+                    <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
+                        <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                            <div class="flex items-center gap-3">
+                                <CpuIcon class="size-6 text-hive" />
 
-                        <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                            <div>
-                                <h1 class="text-3xl font-black tracking-tight">Create Cell</h1>
-                                <p class="mt-2 text-sm text-zinc-400">
-                                    Follow the steps to configure and deploy a new Cell.
-                                </p>
+                                <div>
+                                    <h1 class="text-2xl font-black sm:text-3xl">
+                                        New Cell
+                                    </h1>
+
+                                    <p class="mt-2 text-sm text-zinc-400">
+                                        Add a new Cell to your HivePanel instance. Cells are isolated environments for running applications or services.
+                                    </p>
+                                </div>
                             </div>
 
                             <Link
                                 href="/admin/cells"
-                                class="inline-flex items-center gap-2 rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 transition hover:border-hive hover:text-hive"
+                                class="inline-flex items-center gap-2 rounded-button border border-zinc-800 bg-[#0d0f11] px-4 py-2 text-sm font-black text-zinc-300 transition hover:border-hive/40 hover:text-white"
                             >
                                 <ArrowLeft class="size-4" />
-                                Back to Cells
+                                Back
                             </Link>
                         </div>
                     </section>

@@ -69,30 +69,28 @@ function formatDate(value?: string) {
         <div class="min-h-screen bg-surface-dark text-white">
             <main class="px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
                 <div class="mx-auto space-y-5">
-                    <section class="space-y-4">
-                        <div class="flex flex-wrap items-center gap-2 text-sm font-bold text-zinc-500">
-                            <Link href="/admin" class="hover:text-hive">Admin</Link>
-                            <span>›</span>
-                            <span class="text-zinc-300">Cells</span>
-                        </div>
+                    <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
+                        <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                            <div class="flex items-center gap-3">
+                                <Server class="size-6 text-hive" />
 
-                        <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                            <div>
-                                <h1 class="text-3xl font-black tracking-tight">
-                                    Cells
-                                </h1>
+                                <div>
+                                    <h1 class="text-2xl font-black sm:text-3xl">
+                                        Cells
+                                    </h1>
 
-                                <p class="mt-2 text-sm text-zinc-400">
-                                    Manage deployed game server cells across all nodes.
-                                </p>
+                                    <p class="mt-2 text-sm text-zinc-400">
+                                        Manage deployed cells and their allocations on worker nodes.
+                                    </p>
+                                </div>
                             </div>
 
                             <Link
                                 href="/admin/cells/create"
-                                class="inline-flex items-center gap-2 rounded-button bg-hive px-4 py-2 text-sm font-black text-black transition hover:opacity-90"
+                                class="inline-flex items-center justify-center gap-2 rounded-button border border-hive bg-hive px-4 py-2 text-sm font-black text-black transition hover:bg-hive-light"
                             >
                                 <Plus class="size-4" />
-                                Create Cell
+                                New Cell
                             </Link>
                         </div>
                     </section>
@@ -127,20 +125,19 @@ function formatDate(value?: string) {
                             </div>
                         </div>
 
-                        <div v-if="cells.length === 0" class="p-8 text-center">
-                            <Boxes class="mx-auto size-10 text-zinc-700" />
-                            <div class="mt-3 text-lg font-black text-white">No cells yet</div>
-                            <p class="mt-1 text-sm text-zinc-500">
-                                Create your first cell to start deploying servers.
-                            </p>
+                        <div
+                            v-if="cells.length === 0"
+                            class="rounded-button border border-zinc-900 bg-[#0d0f11] p-10 text-center"
+                        >
+                            <Server class="mx-auto size-10 text-zinc-700" />
 
-                            <Link
-                                href="/admin/cells/create"
-                                class="mt-5 inline-flex items-center gap-2 rounded-button bg-hive px-4 py-2 text-sm font-black text-black transition hover:opacity-90"
-                            >
-                                <Plus class="size-4" />
-                                Create Cell
-                            </Link>
+                            <h2 class="mt-4 text-lg font-black text-zinc-300">
+                                No cells yet
+                            </h2>
+
+                            <p class="mt-2 text-sm text-zinc-500">
+                                Add your first cell to get started.
+                            </p>
                         </div>
 
                         <div v-else class="overflow-x-auto">
