@@ -16,7 +16,7 @@ class AdminUserController extends Controller
     {
         return Inertia::render('Admin/Users/Index', [
             'users' => User::query()
-                ->withCount('ownedCells')
+                ->withCount('cells')
                 ->latest()
                 ->get()
                 ->map(fn (User $user) => $this->userPayload($user)),

@@ -52,7 +52,7 @@ class User extends Authenticatable
         ];
     }
 
-    public function ownedCells()
+    public function cells()
     {
         return $this->hasMany(\App\Models\Cell::class, 'owner_id');
     }
