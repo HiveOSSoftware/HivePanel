@@ -77,6 +77,7 @@ class AdminUserController extends Controller
         return [
             'id' => $user->getRouteKey(),
             'database_id' => $user->id,
+            'is_admin' => $user->is_admin,
             'name' => $user->name,
             'email' => $user->email,
             'cells_count' => $user->cells_count ?? null,
