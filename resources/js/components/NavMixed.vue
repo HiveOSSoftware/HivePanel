@@ -49,6 +49,10 @@ function isActive(href: string) {
     const hrefPath = normalisePath(href)
     const path = currentPath.value
 
+    if (hrefPath === '' || hrefPath === '/' || hrefPath === '/admin') {
+        return path === hrefPath
+    }
+
     if (/^\/cells\/[^/]+$/.test(hrefPath)) {
         return path === hrefPath
     }

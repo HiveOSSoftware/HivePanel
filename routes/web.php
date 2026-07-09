@@ -36,11 +36,14 @@ use App\Http\Controllers\Cells\CellPowerController;
 use App\Http\Controllers\Cells\CellScheduleController;
 use App\Http\Controllers\Cells\CellSettingsController;
 use App\Http\Controllers\Cells\CellSubUserController;
+use App\Http\Controllers\Install\WorkerInstallScriptController;
 use App\Support\CellPermissions;
 
 Route::get('/schedule-actions', [CellScheduleController::class, 'actionDefinitions'])->name('schedule-actions');
 Route::post('/cron/generate', [CellScheduleController::class, 'generateCron'])->name('cron.generate');
 Route::post('/workflows/generate', [CellScheduleController::class, 'generateWorkflow'])->name('workflows.generate');
+
+Route::get('/install/worker.sh', [WorkerInstallScriptController::class, 'show'])->name('install.worker');
 
 Route::middleware(['auth', 'verified'])->group(function () {
     // Admin Routes
@@ -97,11 +100,16 @@ Route::middleware(['auth', 'verified'])->group(function () {
         });
 
         // Settings
-        Route::get('/settings', [AdminSettingsController::class, 'index'])->name('settings');
-        Route::patch('/settings/general', [AdminSettingsController::class, 'updateGeneral'])->name('settings.general.update');
-        Route::patch('/settings/mail', [AdminSettingsController::class, 'updateMail'])->name('settings.mail.update');
-        Route::patch('/settings/captcha', [AdminSettingsController::class, 'updateCaptcha'])->name('settings.captcha.update');
-        Route::patch('/settings/oauth', [AdminSettingsController::class, 'updateOAuth'])->name('settings.oauth.update');
+        Route::prefix('settings')->name('admin.settings.')->group(function () {
+            Route::get('/', [AdminSettingsController::class, 'index'])->name('index');
+
+            Route::put('/general', [AdminSettingsController::class, 'updateGeneral'])->name('general.update');
+            Route::put('/security', [AdminSettingsController::class, 'updateSecurity'])->name('security.update');
+            Route::put('/mail', [AdminSettingsController::class, 'updateMail'])->name('mail.update');
+            Route::post('/mail/test', [AdminSettingsController::class, 'testMail'])->name('mail.test');
+            Route::put('/captcha', [AdminSettingsController::class, 'updateCaptcha'])->name('captcha.update');
+            Route::put('/oauth', [AdminSettingsController::class, 'updateOAuth'])->name('oauth.update');
+        });
 
         // Users
         Route::prefix('users')->name('users.')->group(function () {
