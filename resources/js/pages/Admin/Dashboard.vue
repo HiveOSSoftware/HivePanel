@@ -1,7 +1,19 @@
 <script setup lang="ts">
 import AppLayout from '@/layouts/AppLayout.vue'
 import { Head, Link } from '@inertiajs/vue3'
-import { Activity, Database, Server, Shield, Users } from 'lucide-vue-next'
+import {
+    Activity,
+    BookOpen,
+    Database,
+    ExternalLink,
+    Github,
+    HeartHandshake,
+    MessageCircle,
+    Server,
+    Shield,
+    TriangleAlert,
+    Users,
+} from 'lucide-vue-next'
 
 defineProps<{
     stats: {
@@ -12,6 +24,18 @@ defineProps<{
         audit_logs: number
     }
     recentLogs: any[]
+    versionStatus: {
+        current: string
+        latest?: string | null
+        is_outdated: boolean
+        checked: boolean
+    }
+    quickLinks: {
+        label: string
+        description: string
+        url: string
+        external: boolean
+    }[]
 }>()
 
 function formatDate(value?: string) {
@@ -44,7 +68,29 @@ function eventLabel(event: string) {
                                     Admin
                                 </h1>
                                 <p class="mt-2 text-sm text-zinc-400">
-                                    Manage HivePanel, nodes, users, cells, and activity.
+                                    Manage admin activity, nodes, users, cells, and system health.
+                                </p>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section
+                        v-if="versionStatus.checked && versionStatus.is_outdated"
+                        class="rounded-panel border border-status-warning/30 bg-status-warning/10 p-5 sm:p-6"
+                    >
+                        <div class="flex items-start gap-3">
+                            <TriangleAlert class="mt-0.5 size-6 text-status-warning" />
+
+                            <div>
+                                <h2 class="text-lg font-black text-status-warning">
+                                    Your panel is not up-to-date!
+                                </h2>
+
+                                <p class="mt-2 text-sm font-bold text-zinc-300">
+                                    The latest version is
+                                    <span class="text-white">{{ versionStatus.latest }}</span>
+                                    and you are currently running
+                                    <span class="text-white">{{ versionStatus.current }}</span>.
                                 </p>
                             </div>
                         </div>
@@ -77,36 +123,70 @@ function eventLabel(event: string) {
                         </div>
                     </section>
 
-                    <section class="grid gap-5">
-                        <div class="rounded-panel border border-zinc-800 bg-surface p-5">
-                            <h2 class="text-lg font-black">Recent Activity</h2>
-
-                            <div class="mt-4 space-y-3">
-                                <div
-                                    v-for="log in recentLogs"
-                                    :key="log.id"
-                                    class="rounded-button border border-zinc-900 bg-[#0d0f11] p-4"
-                                >
-                                    <div class="text-sm font-bold text-zinc-300">
-                                        {{ log.description || eventLabel(log.event) }}
+                    <section class="grid gap-3 md:grid-cols-2">
+                        <section class="grid gap-3 md:grid-cols-2">
+                            <a
+                                v-for="(link, index) in quickLinks"
+                                :key="link.label"
+                                :href="link.url"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                class="group rounded-panel border border-zinc-800 bg-surface p-5 transition hover:-translate-y-0.5 hover:border-hive/50 hover:bg-surface-light"
+                            >
+                                <div class="flex items-center justify-between gap-3">
+                                    <div
+                                        class="flex size-11 items-center justify-center rounded-button border border-zinc-800 bg-[#0d0f11] text-hive transition group-hover:border-hive/50 group-hover:bg-hive group-hover:text-black"
+                                    >
+                                        <MessageCircle v-if="index === 0" class="size-5" />
+                                        <BookOpen v-else-if="index === 1" class="size-5" />
+                                        <Github v-else-if="index === 2" class="size-5" />
+                                        <HeartHandshake v-else class="size-5" />
                                     </div>
 
-                                    <div class="mt-2 flex flex-wrap gap-3 text-xs text-zinc-500">
-                                        <span>{{ eventLabel(log.event) }}</span>
-                                        <span>{{ log.user?.name || log.user?.email || 'System' }}</span>
-                                        <span v-if="log.cell">{{ log.cell.name }}</span>
-                                        <span>{{ formatDate(log.created_at) }}</span>
-                                    </div>
+                                    <ExternalLink class="size-4 text-zinc-600 transition group-hover:text-hive" />
                                 </div>
 
-                                <div
-                                    v-if="recentLogs.length === 0"
-                                    class="rounded-button border border-zinc-900 bg-[#0d0f11] p-4 text-sm font-bold text-zinc-500"
-                                >
-                                    No activity yet.
+                                <div class="mt-4 text-sm font-black text-white">
+                                    {{ link.label }}
+                                </div>
+
+                                <p class="mt-1 text-xs font-bold text-zinc-500">
+                                    {{ link.description }}
+                                </p>
+                            </a>
+                        </section>
+
+                        <section class="grid gap-5">
+                            <div class="rounded-panel border border-zinc-800 bg-surface p-5">
+                                <h2 class="text-lg font-black">Recent Activity</h2>
+
+                                <div class="mt-4 space-y-3">
+                                    <div
+                                        v-for="log in recentLogs"
+                                        :key="log.id"
+                                        class="rounded-button border border-zinc-900 bg-[#0d0f11] p-4"
+                                    >
+                                        <div class="text-sm font-bold text-zinc-300">
+                                            {{ log.description || eventLabel(log.event) }}
+                                        </div>
+
+                                        <div class="mt-2 flex flex-wrap gap-3 text-xs text-zinc-500">
+                                            <span>{{ eventLabel(log.event) }}</span>
+                                            <span>{{ log.user?.name || log.user?.email || 'System' }}</span>
+                                            <span v-if="log.cell">{{ log.cell.name }}</span>
+                                            <span>{{ formatDate(log.created_at) }}</span>
+                                        </div>
+                                    </div>
+
+                                    <div
+                                        v-if="recentLogs.length === 0"
+                                        class="rounded-button border border-zinc-900 bg-[#0d0f11] p-4 text-sm font-bold text-zinc-500"
+                                    >
+                                        No activity yet.
+                                    </div>
                                 </div>
                             </div>
-                        </div>
+                        </section>
                     </section>
                 </div>
             </main>
