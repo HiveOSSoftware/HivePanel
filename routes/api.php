@@ -11,6 +11,16 @@ Route::get('/user', function (Request $request) {
     return $request->user();
 })->middleware('auth:sanctum');
 
+Route::prefix('worker')
+    ->middleware([
+        'worker.auth',
+        'throttle:120,1',
+    ])
+    ->group(function () {
+        Route::post('/sftp/auth', SftpAuthController::class)
+            ->name('api.worker.sftp.auth');
+    });
+
 Route::post('/worker/register', WorkerRegistrationController::class)->name('worker.register');
 Route::post('/worker/heartbeat', WorkerHeartbeatController::class)->name('worker.heartbeat');
 

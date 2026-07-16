@@ -43,6 +43,9 @@ class CellPermissions
     public const STARTUP_UPDATE = 'startup.update';
     public const NETWORK_UPDATE = 'network.update';
 
+    public const SFTP_RESET = 'sftp.reset';
+    public const SFTP_REVOKE = 'sftp.revoke';
+
     public static function groups(): array
     {
         return [
@@ -61,6 +64,8 @@ class CellPermissions
                 self::FILES_UPLOAD => 'Upload files',
                 self::FILES_DELETE => 'Delete files',
                 self::FILES_RESTORE => 'Restore deleted files',
+                self::SFTP_RESET => 'Reset SFTP password',
+                self::SFTP_REVOKE => 'Revoke SFTP access',
             ],
             'Backups' => [
                 self::BACKUPS_VIEW => 'View backups',

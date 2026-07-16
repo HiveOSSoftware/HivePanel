@@ -31,6 +31,8 @@ const form = ref({
     scheme: props.node.scheme ?? 'http',
     daemon_port: props.node.daemon_port ?? props.node.port ?? 8080,
     sftp_port: props.node.sftp_port ?? 2022,
+    sftp_enabled: props.node.sftp_enabled ?? true,
+    sftp_fqdn: props.node.sftp_fqdn ?? '',
 
     behind_proxy: props.node.behind_proxy ?? false,
     maintenance_mode: props.node.maintenance_mode ?? false,
@@ -200,14 +202,74 @@ function save() {
                                     </label>
 
                                     <label class="space-y-2">
-                                        <span class="text-xs font-black uppercase tracking-wide text-zinc-400">SFTP Port</span>
-                                        <input v-model="form.sftp_port" type="number" class="w-full rounded-button border border-zinc-800 bg-surface-light px-4 py-3 text-sm text-zinc-200 outline-none focus:border-hive" />
-                                    </label>
-
-                                    <label class="space-y-2">
                                         <span class="text-xs font-black uppercase tracking-wide text-zinc-400">Max Upload MiB</span>
                                         <input v-model="form.max_upload_mib" type="number" class="w-full rounded-button border border-zinc-800 bg-surface-light px-4 py-3 text-sm text-zinc-200 outline-none focus:border-hive" />
                                     </label>
+                                </div>
+                            </section>
+
+                            <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
+                                <div>
+                                    <h2 class="text-lg font-black text-white">
+                                        SFTP
+                                    </h2>
+
+                                    <p class="mt-1 text-sm text-zinc-500">
+                                        Configure the public SFTP endpoint users will connect to.
+                                    </p>
+                                </div>
+
+                                <div class="mt-5 space-y-5">
+                                    <label class="flex cursor-pointer items-center justify-between rounded-button border border-zinc-900 bg-[#0d0f11] p-4">
+                                        <div>
+                                            <div class="font-black text-white">
+                                                Enable SFTP
+                                            </div>
+                                            <div class="text-sm text-zinc-500">
+                                                Allow users to connect to this node using SFTP.
+                                            </div>
+                                        </div>
+
+                                        <input
+                                            v-model="form.sftp_enabled"
+                                            type="checkbox"
+                                            class="size-5 rounded border-zinc-700 bg-black text-hive focus:ring-hive"
+                                        />
+                                    </label>
+
+                                    <div class="grid gap-5 lg:grid-cols-2">
+                                        <div>
+                                            <label class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                                SFTP FQDN
+                                            </label>
+
+                                            <input
+                                                v-model="form.sftp_fqdn"
+                                                type="text"
+                                                class="mt-2 w-full rounded-button border border-zinc-800 bg-[#0d0f11] px-3 py-2 text-sm font-bold text-white outline-none transition focus:border-hive/50"
+                                                placeholder="sftp.node01.example.com"
+                                            />
+
+                                            <p class="mt-2 text-xs text-zinc-600">
+                                                Leave blank to use the node FQDN.
+                                            </p>
+                                        </div>
+
+                                        <div>
+                                            <label class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                                SFTP Port
+                                            </label>
+
+                                            <input
+                                                v-model="form.sftp_port"
+                                                type="number"
+                                                min="1"
+                                                max="65535"
+                                                class="mt-2 w-full rounded-button border border-zinc-800 bg-[#0d0f11] px-3 py-2 text-sm font-bold text-white outline-none transition focus:border-hive/50"
+                                                placeholder="2022"
+                                            />
+                                        </div>
+                                    </div>
                                 </div>
                             </section>
 

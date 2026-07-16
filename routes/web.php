@@ -249,6 +249,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
             ->middleware('cell.permission:' . CellPermissions::SCHEDULES_UPDATE);
         Route::get('/{id}/schedules-json', [CellScheduleController::class, 'json'])->name('schedules-json')
             ->middleware('cell.permission:' . CellPermissions::SCHEDULES_VIEW);
+
+        Route::get('/{id}/sftp/reset', [CellSftpCredentialController::class, 'reset'])->name('sftp.reset')
+            ->middleware('cell.permission:' . CellPermissions::SFTP_RESET);
+        Route::get('/{id}/sftp/revoke', [CellSftpCredentialController::class, 'revoke'])->name('sftp.revoke')
+            ->middleware('cell.permission:' . CellPermissions::SFTP_RESET);
     });
 });
 

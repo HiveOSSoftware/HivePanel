@@ -22,6 +22,8 @@ class Node extends Model
         'port',
         'daemon_port',
         'sftp_port',
+        'sftp_enabled',
+        'sftp_fqdn',
 
         'api_token',
 
@@ -53,6 +55,7 @@ class Node extends Model
         'port' => 'integer',
         'daemon_port' => 'integer',
         'sftp_port' => 'integer',
+        'sftp_enabled' => 'boolean',
 
         'behind_proxy' => 'boolean',
         'maintenance_mode' => 'boolean',
@@ -116,5 +119,15 @@ class Node extends Model
     public function allocations()
     {
         return $this->hasMany(NodeAllocation::class);
+    }
+
+    public function sftpHost(): string
+    {
+        return $this->sftp_fqdn ?: $this->fqdn;
+    }
+
+    public function sftpAddress(): string
+    {
+        return $this->sftpHost() . ':' . $this->sftp_port;
     }
 }

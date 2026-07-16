@@ -66,4 +66,9 @@ class User extends Authenticatable
     {
         return $this->hasMany(\App\Models\AuditLog::class);
     }
+
+    public function sftpCredentials()
+    {
+        return $this->hasMany(\App\Models\SftpCredential::class);
+    }
 }

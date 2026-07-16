@@ -79,6 +79,12 @@ worker:
   token: ""
   listen: "0.0.0.0:{$node->daemon_port}"
 
+sftp:
+  enabled: {$this->bool($node->sftp_enabled)}
+  listen: "0.0.0.0:{$node->sftp_port}"
+  public_fqdn: "{$node->sftpHost()}"
+  public_port: {$node->sftp_port}
+
 node:
   id: ""
 
@@ -271,6 +277,8 @@ SERVICE;
             'scheme' => ['required', 'string', 'in:http,https'],
             'daemon_port' => ['required', 'integer', 'min:1', 'max:65535'],
             'sftp_port' => ['required', 'integer', 'min:1', 'max:65535'],
+            'sftp_enabled' => ['boolean'],
+            'sftp_fqdn' => ['nullable', 'string', 'max:255'],
 
             'api_token' => ['sometimes', 'nullable', 'string', 'max:500'],
 
@@ -301,7 +309,10 @@ SERVICE;
 
             'scheme' => $node->scheme,
             'daemon_port' => $node->daemon_port,
-            'sftp_port' => $node->sftp_port,
+            'sftp_enabled' => $node->sftp_enabled,
+            'sftp_fqdn' => $node->sftp_fqdn,
+            'sftp_host' => $node->sftpHost(),
+            'sftp_address' => $node->sftpAddress(),
             'port' => $node->daemon_port,
 
             'behind_proxy' => $node->behind_proxy,

@@ -95,4 +95,9 @@ class Cell extends Model
     {
         return $this->hasMany(NodeAllocation::class);
     }
+
+    public function sftpCredentials()
+    {
+        return $this->hasMany(\App\Models\SftpCredential::class);
+    }
 }
