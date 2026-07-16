@@ -15,6 +15,9 @@ class CellFileController extends CellBaseController
     {
         $cell = $this->panelCellOrFail($id);
         $workerCell = $this->getCellOrFail($cell, $cells);
+        $credential = $cell->sftpCredentials()
+            ->where('user_id', request()->user()->id)
+            ->first();
 
         if ($this->isLocked($workerCell)) {
             return $this->lockedPage($workerCell);
@@ -22,6 +25,14 @@ class CellFileController extends CellBaseController
 
         return Inertia::render('Cells/Files', [
             'cell' => $workerCell,
+            'sftp' => [
+                'enabled' => (bool) $cell->node?->sftp_enabled,
+                'host' => $cell->node?->sftpHost(),
+                'port' => $cell->node?->sftp_port ?? 2022,
+                'username' => $credential?->username ?? "{$cell->id}." . request()->user()->id,
+                'has_password' => $credential && ! $credential->revoked_at,
+                'last_used_at' => $credential?->last_used_at?->toISOString(),
+            ],
         ]);
     }
 

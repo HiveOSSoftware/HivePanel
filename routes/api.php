@@ -3,6 +3,7 @@
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
+use App\Http\Controllers\Api\Workers\SftpAuthController;
 use App\Http\Controllers\Api\Workers\WorkerRegistrationController;
 use App\Http\Controllers\Api\Workers\WorkerHeartbeatController;
 use App\Http\Controllers\Admin\AdminCombImportController;

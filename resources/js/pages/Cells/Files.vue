@@ -15,9 +15,38 @@ import {
     Trash,
     Upload,
     ChevronDown,
+    Check,
+    Copy,
+    ExternalLink,
+    Eye,
+    EyeOff,
 } from 'lucide-vue-next'
 
-const props = defineProps<{ cell: any }>()
+type SftpDetails = {
+    enabled: boolean
+    host: string
+    port: number
+    username: string
+    has_password: boolean
+    password?: string | null
+    last_used_at?: string | null
+}
+
+const props = defineProps<{
+    cell: any
+    sftp: SftpDetails
+}>()
+
+const sftpDetails = ref<SftpDetails>({
+    ...props.sftp,
+})
+
+const generatedSftpPassword = ref<string | null>(
+    sftpDetails.value.password ?? null,
+)
+
+const generatingSftpPassword = ref(false)
+const revokingSftpAccess = ref(false)
 
 type FileEntry = {
     name: string
@@ -113,6 +142,134 @@ const confirmButtonClass = computed(() => {
 
     return 'border-status-danger bg-status-danger text-white hover:brightness-110'
 })
+
+const showSftpPassword = ref(false)
+const copiedSftpField = ref<string | null>(null)
+
+async function copySftpValue(field: string, value?: string | null) {
+    if (!value) return
+
+    await navigator.clipboard.writeText(value)
+
+    copiedSftpField.value = field
+
+    window.setTimeout(() => {
+        if (copiedSftpField.value === field) {
+            copiedSftpField.value = null
+        }
+    }, 1500)
+}
+
+function launchSftp() {
+    const username = encodeURIComponent(
+        sftpDetails.value.username ?? '',
+    )
+
+    const host = sftpDetails.value.host ?? ''
+    const port = sftpDetails.value.port ?? 22
+
+    if (!host) return
+
+    const authentication = username ? `${username}@` : ''
+
+    window.location.href =
+        `sftp://${authentication}${host}:${port}`
+}
+
+async function generateSftpPassword() {
+    if (!cellId.value || generatingSftpPassword.value) {
+        return
+    }
+
+    generatingSftpPassword.value = true
+    error.value = ''
+
+    try {
+        const response = await fetch(
+            `/cells/${cellId.value}/sftp/reset`,
+            {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    Accept: 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRF-TOKEN': csrfToken(),
+                },
+            },
+        )
+
+        if (!response.ok) {
+            showError(
+                await responseError(
+                    response,
+                    'Failed to generate SFTP password.',
+                ),
+            )
+
+            return
+        }
+
+        const data = await response.json()
+
+        generatedSftpPassword.value = data.password
+            ?? data.sftp_password
+            ?? null
+
+        sftpDetails.value.username = data.username
+            ?? data.sftp_username
+            ?? sftpDetails.value.username
+
+        sftpDetails.value.has_password = true
+        showSftpPassword.value = true
+
+        showToast('SFTP password generated.')
+    } finally {
+        generatingSftpPassword.value = false
+    }
+}
+
+async function revokeSftpAccess() {
+    if (!cellId.value || revokingSftpAccess.value) {
+        return
+    }
+
+    revokingSftpAccess.value = true
+    error.value = ''
+
+    try {
+        const response = await fetch(
+            `/cells/${cellId.value}/sftp/revoke`,
+            {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    Accept: 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRF-TOKEN': csrfToken(),
+                },
+            },
+        )
+
+        if (!response.ok) {
+            showError(
+                await responseError(
+                    response,
+                    'Failed to revoke SFTP access.',
+                ),
+            )
+
+            return
+        }
+
+        sftpDetails.value.has_password = false
+        generatedSftpPassword.value = null
+        showSftpPassword.value = false
+
+        showToast('SFTP access revoked.')
+    } finally {
+        revokingSftpAccess.value = false
+    }
+}
 
 function csrfToken() {
     return document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content ?? ''
@@ -907,28 +1064,289 @@ onUnmounted(() => {
             </div>
         </div>
 
-        <div v-if="sftpOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-            <div class="w-full max-w-md rounded-panel border border-zinc-800 bg-surface p-6">
+        <div
+            v-if="sftpOpen"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+            @click.self="sftpOpen = false"
+        >
+            <div class="w-full max-w-2xl rounded-panel border border-zinc-800 bg-surface p-6 shadow-2xl">
                 <div class="flex items-start gap-4">
-                    <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-button bg-hive/10 text-hive">
+                    <div class="flex size-12 shrink-0 items-center justify-center rounded-button bg-hive/10 text-hive">
                         <Server class="size-6" />
                     </div>
 
-                    <div>
+                    <div class="min-w-0">
                         <h2 class="text-xl font-black text-white">
                             SFTP Details
                         </h2>
 
                         <p class="mt-2 text-sm leading-6 text-zinc-400">
-                            SFTP support will be added later. This modal is ready for host, port, username, and password/reset details.
+                            Connect to this cell using an SFTP client such as FileZilla,
+                            WinSCP, or Cyberduck.
                         </p>
                     </div>
                 </div>
 
-                <div class="mt-6 flex justify-end">
-                    <button class="rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 hover:text-white" @click="sftpOpen = false">
-                        Close
+                <div
+                    v-if="!sftpDetails.enabled"
+                    class="mt-6 rounded-button border border-status-warning/30 bg-status-warning/10 p-4"
+                >
+                    <p class="text-sm font-bold text-status-warning">
+                        SFTP is currently disabled on this node.
+                    </p>
+                </div>
+
+                <div
+                    v-else
+                    class="mt-6 space-y-3"
+                >
+                    <div class="rounded-button border border-zinc-800 bg-[#0d0f11] p-4">
+                        <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                            Address
+                        </div>
+
+                        <div class="mt-2 flex items-center gap-3">
+                            <code class="min-w-0 flex-1 break-all text-sm font-bold text-white">
+                                {{ sftpDetails.host }}:{{ sftpDetails.port }}
+                            </code>
+
+                            <button
+                                type="button"
+                                class="flex size-9 shrink-0 items-center justify-center rounded-button border border-zinc-800 bg-surface-light text-zinc-400 transition hover:border-hive/50 hover:text-hive"
+                                title="Copy address"
+                                @click="copySftpValue('address', `${sftpDetails.host}:${sftpDetails.port}`)"
+                            >
+                                <Check
+                                    v-if="copiedSftpField === 'address'"
+                                    class="size-4 text-status-success"
+                                />
+                                <Copy
+                                    v-else
+                                    class="size-4"
+                                />
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="rounded-button border border-zinc-800 bg-[#0d0f11] p-4">
+                        <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                            Username
+                        </div>
+
+                        <div class="mt-2 flex items-center gap-3">
+                            <code class="min-w-0 flex-1 break-all text-sm font-bold text-white">
+                                {{ sftpDetails.username }}
+                            </code>
+
+                            <button
+                                type="button"
+                                class="flex size-9 shrink-0 items-center justify-center rounded-button border border-zinc-800 bg-surface-light text-zinc-400 transition hover:border-hive/50 hover:text-hive"
+                                title="Copy username"
+                                @click="copySftpValue('username', sftpDetails.username)"
+                            >
+                                <Check
+                                    v-if="copiedSftpField === 'username'"
+                                    class="size-4 text-status-success"
+                                />
+                                <Copy
+                                    v-else
+                                    class="size-4"
+                                />
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="rounded-button border border-zinc-800 bg-[#0d0f11] p-4">
+                        <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                            Password
+                        </div>
+
+                        <div
+                            v-if="generatedSftpPassword"
+                            class="mt-2"
+                        >
+                            <div class="flex items-center gap-3">
+                                <code class="min-w-0 flex-1 break-all text-sm font-bold text-white">
+                                    {{
+                                        showSftpPassword
+                                            ? generatedSftpPassword
+                                            : '••••••••••••••••••••••••'
+                                    }}
+                                </code>
+
+                                <button
+                                    type="button"
+                                    class="flex size-9 shrink-0 items-center justify-center rounded-button border border-zinc-800 bg-surface-light text-zinc-400 transition hover:border-hive/50 hover:text-hive"
+                                    :title="showSftpPassword ? 'Hide password' : 'Show password'"
+                                    @click="showSftpPassword = !showSftpPassword"
+                                >
+                                    <EyeOff
+                                        v-if="showSftpPassword"
+                                        class="size-4"
+                                    />
+                                    <Eye
+                                        v-else
+                                        class="size-4"
+                                    />
+                                </button>
+
+                                <button
+                                    type="button"
+                                    class="flex size-9 shrink-0 items-center justify-center rounded-button border border-zinc-800 bg-surface-light text-zinc-400 transition hover:border-hive/50 hover:text-hive"
+                                    title="Copy password"
+                                    @click="copySftpValue(
+                                        'password',
+                                        generatedSftpPassword,
+                                    )"
+                                >
+                                    <Check
+                                        v-if="copiedSftpField === 'password'"
+                                        class="size-4 text-status-success"
+                                    />
+                                    <Copy
+                                        v-else
+                                        class="size-4"
+                                    />
+                                </button>
+                            </div>
+
+                            <p class="mt-3 text-xs font-bold text-status-warning">
+                                Copy this password now. It will not be shown again after
+                                leaving or refreshing this page.
+                            </p>
+                        </div>
+
+                        <div
+                            v-else-if="sftpDetails.has_password"
+                            class="mt-2"
+                        >
+                            <div class="text-sm font-bold text-white">
+                                Password already configured
+                            </div>
+
+                            <p class="mt-1 text-xs leading-5 text-zinc-500">
+                                The existing password cannot be displayed. Generate a new
+                                password if you no longer have it.
+                            </p>
+
+                            <button
+                                type="button"
+                                class="mt-4 inline-flex items-center gap-2 rounded-button border border-hive/40 bg-hive/10 px-3 py-2 text-xs font-black text-hive transition hover:bg-hive/20 disabled:opacity-50"
+                                :disabled="generatingSftpPassword"
+                                @click="generateSftpPassword"
+                            >
+                                <RefreshCw
+                                    class="size-4"
+                                    :class="{ 'animate-spin': generatingSftpPassword }"
+                                />
+
+                                {{
+                                    generatingSftpPassword
+                                        ? 'Generating...'
+                                        : 'Reset Password'
+                                }}
+                            </button>
+                        </div>
+
+                        <div
+                            v-else
+                            class="mt-2"
+                        >
+                            <div class="text-sm font-bold text-status-warning">
+                                No SFTP password configured
+                            </div>
+
+                            <p class="mt-1 text-xs leading-5 text-zinc-500">
+                                Generate a persistent password to connect through FileZilla,
+                                WinSCP, or Cyberduck.
+                            </p>
+
+                            <button
+                                type="button"
+                                class="mt-4 inline-flex items-center gap-2 rounded-button bg-hive px-3 py-2 text-xs font-black text-black transition hover:bg-hive/90 disabled:opacity-50"
+                                :disabled="generatingSftpPassword"
+                                @click="generateSftpPassword"
+                            >
+                                <RefreshCw
+                                    class="size-4"
+                                    :class="{ 'animate-spin': generatingSftpPassword }"
+                                />
+
+                                {{
+                                    generatingSftpPassword
+                                        ? 'Generating...'
+                                        : 'Generate Password'
+                                }}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="rounded-button border border-zinc-800 bg-[#0d0f11] p-4">
+                        <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                            Connection URL
+                        </div>
+
+                        <div class="mt-2 flex items-center gap-3">
+                            <code class="min-w-0 flex-1 break-all text-sm font-bold text-white">
+                                sftp://{{ sftpDetails.username }}@{{ sftpDetails.host }}:{{ sftpDetails.port }}
+                            </code>
+
+                            <button
+                                type="button"
+                                class="flex size-9 shrink-0 items-center justify-center rounded-button border border-zinc-800 bg-surface-light text-zinc-400 transition hover:border-hive/50 hover:text-hive"
+                                title="Copy connection URL"
+                                @click="copySftpValue(
+                                    'url',
+                                    `sftp://${sftpDetails.username}@${sftpDetails.host}:${sftpDetails.port}`,
+                                )"
+                            >
+                                <Check
+                                    v-if="copiedSftpField === 'url'"
+                                    class="size-4 text-status-success"
+                                />
+                                <Copy
+                                    v-else
+                                    class="size-4"
+                                />
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
+                    <button
+                        v-if="sftpDetails.has_password"
+                        type="button"
+                        class="inline-flex items-center justify-center gap-2 rounded-button border border-status-danger/40 bg-status-danger/10 px-4 py-2 text-sm font-black text-status-danger transition hover:bg-status-danger/20 disabled:opacity-50"
+                        :disabled="revokingSftpAccess"
+                        @click="revokeSftpAccess"
+                    >
+                        <Trash class="size-4" />
+                        {{ revokingSftpAccess ? 'Revoking...' : 'Revoke Access' }}
                     </button>
+
+                    <div class="flex flex-col-reverse gap-3 sm:flex-row">
+                        <button
+                            type="button"
+                            class="rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 transition hover:border-zinc-700 hover:text-white"
+                            @click="sftpOpen = false"
+                        >
+                            Close
+                        </button>
+
+                        <button
+                            type="button"
+                            class="inline-flex items-center justify-center gap-2 rounded-button bg-hive px-4 py-2 text-sm font-black text-black transition hover:bg-hive/90 disabled:cursor-not-allowed disabled:opacity-50"
+                            :disabled="
+                                !sftpDetails.enabled ||
+                                !sftpDetails.has_password
+                            "
+                            @click="launchSftp"
+                        >
+                            <ExternalLink class="size-4" />
+                            Launch SFTP
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
