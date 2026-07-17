@@ -233,7 +233,7 @@ function save() {
                                         <input
                                             v-model="form.sftp_enabled"
                                             type="checkbox"
-                                            class="size-5 rounded border-zinc-700 bg-black text-hive focus:ring-hive"
+                                            class="accent-hive"
                                         />
                                     </label>
 

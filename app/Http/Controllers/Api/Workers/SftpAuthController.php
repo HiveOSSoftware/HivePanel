@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Controllers\Api\Worker;
+namespace App\Http\Controllers\Api\Workers;
 
 use App\Http\Controllers\Controller;
 use App\Models\Node;
