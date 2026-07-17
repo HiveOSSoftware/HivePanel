@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Cells;
 use App\Models\Cell;
 use App\Models\SftpCredential;
 use App\Models\User;
+use App\Services\Sftp\SftpAccessService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -12,14 +13,18 @@ use Illuminate\Support\Str;
 
 class CellSftpCredentialController extends CellBaseController
 {
-    public function reset(Request $request, string $id): JsonResponse
-    {
+    public function reset(
+        Request $request,
+        string $id,
+        SftpAccessService $access,
+    ): JsonResponse {
         $cell = $this->panelCellOrFail($id);
         $user = $request->user();
 
         abort_unless(
-            $this->canManageCredential($cell, $user),
+            $access->canAccess($cell, $user),
             403,
+            'You do not have permission to use SFTP for this cell.',
         );
 
         abort_unless(
@@ -51,14 +56,18 @@ class CellSftpCredentialController extends CellBaseController
         ]);
     }
 
-    public function revoke(Request $request, string $id): JsonResponse
-    {
+    public function revoke(
+        Request $request,
+        string $id,
+        SftpAccessService $access,
+    ): JsonResponse {
         $cell = $this->panelCellOrFail($id);
         $user = $request->user();
 
         abort_unless(
-            $this->canManageCredential($cell, $user),
+            $access->canAccess($cell, $user),
             403,
+            'You do not have permission to manage SFTP for this cell.',
         );
 
         $credential = SftpCredential::query()
@@ -81,12 +90,6 @@ class CellSftpCredentialController extends CellBaseController
             'message' => 'SFTP access revoked.',
             'has_password' => false,
         ]);
-    }
-
-    private function canManageCredential(Cell $cell, User $user): bool
-    {
-        return (string) $cell->owner_id === (string) $user->id
-            || (bool) $user->is_admin;
     }
 
     private function username(Cell $cell, User $user): string
