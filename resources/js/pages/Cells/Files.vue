@@ -69,38 +69,25 @@ const entries = ref<FileEntry[]>([])
 const loading = ref(false)
 const error = ref('')
 const actionLoading = ref('')
-const pageSize = 250
 const currentPage = ref(1)
 
-const totalPages = computed(() => {
-    return Math.max(1, Math.ceil(entries.value.length / pageSize))
+const perPage = ref(250)
+
+const pagination = ref({
+    page: 1,
+    per_page: 250,
+    total: 0,
+    total_pages: 1,
+    from: 0,
+    to: 0,
 })
 
-const paginatedEntries = computed(() => {
-    const start = (currentPage.value - 1) * pageSize
-    const end = start + pageSize
-
-    return entries.value.slice(start, end)
-})
-
-const paginationStart = computed(() => {
-    if (entries.value.length === 0) {
-        return 0
-    }
-
-    return (currentPage.value - 1) * pageSize + 1
-})
-
-const paginationEnd = computed(() => {
-    return Math.min(
-        currentPage.value * pageSize,
-        entries.value.length,
-    )
-})
+const totalPages = computed(() => pagination.value.total_pages)
 
 const visiblePageNumbers = computed(() => {
-    const total = totalPages.value
-    const current = currentPage.value
+    const total = pagination.value.total_pages
+    const current = pagination.value.page
+
     const pages: number[] = []
 
     const start = Math.max(1, current - 2)
@@ -113,22 +100,21 @@ const visiblePageNumbers = computed(() => {
     return pages
 })
 
-function goToPage(page: number) {
-    const target = Math.min(
-        Math.max(page, 1),
-        totalPages.value,
-    )
-
-    if (target === currentPage.value) {
+async function goToPage(page: number) {
+    if (
+        page < 1 ||
+        page > pagination.value.total_pages ||
+        page === currentPage.value
+    ) {
         return
     }
 
-    currentPage.value = target
+    currentPage.value = page
 
-    window.scrollTo({
-        top: 0,
-        behavior: 'smooth',
-    })
+    await loadFiles(
+        currentPath.value,
+        true,
+    )
 }
 
 function previousPage() {
@@ -474,36 +460,53 @@ async function loadFiles(
     loading.value = true
     error.value = ''
 
+    const requestedPage = preservePage
+        ? currentPage.value
+        : 1
+
     try {
-        const response = await fetch(`/cells/${cellId.value}/files-json?path=${encodeURIComponent(path)}`, {
-            headers: { Accept: 'application/json' },
+        const params = new URLSearchParams({
+            path,
+            page: requestedPage.toString(),
+            per_page: perPage.value.toString(),
         })
 
+        const response = await fetch(
+            `/cells/${cellId.value}/files-json?${params.toString()}`,
+            {
+                headers: {
+                    Accept: 'application/json',
+                },
+            },
+        )
+
         if (!response.ok) {
-            error.value = await responseError(response, 'Failed to load files.')
+            error.value = await responseError(
+                response,
+                'Failed to load files.',
+            )
+
             return
         }
 
         const data = await response.json()
 
         currentPath.value = data.path ?? path
+        entries.value = data.files ?? []
 
-        if (!preservePage) {
-            currentPage.value = 1
+        pagination.value = {
+            page: data.pagination?.page ?? requestedPage,
+            per_page: data.pagination?.per_page ?? perPage.value,
+            total: data.pagination?.total ?? entries.value.length,
+            total_pages: data.pagination?.total_pages ?? 1,
+            from: data.pagination?.from ?? 0,
+            to: data.pagination?.to ?? entries.value.length,
         }
 
-        entries.value = (data.files ?? []).sort((a: FileEntry, b: FileEntry) => {
-            
-            const aFolder = isFolder(a)
-            const bFolder = isFolder(b)
-
-            if (aFolder !== bFolder) return aFolder ? -1 : 1
-
-            return a.name.localeCompare(b.name, undefined, {
-                sensitivity: 'base',
-                numeric: true,
-            })
-        })
+        currentPage.value = pagination.value.page
+        perPage.value = pagination.value.per_page
+    } catch {
+        error.value = 'Failed to connect to the worker.'
     } finally {
         loading.value = false
     }
@@ -957,12 +960,12 @@ onUnmounted(() => {
                             {{ error }}
                         </div>
 
-                        <div v-else-if="entries.length === 0" class="p-6 text-zinc-500">
+                        <div v-else-if="pagination.total === 0" class="p-6 text-zinc-500">
                             This folder is empty.
                         </div>
 
                         <div
-                            v-for="entry in paginatedEntries"
+                            v-for="entry in entries"
                             v-else
                             :key="entry.path"
                             class="grid cursor-pointer grid-cols-[1fr_auto] gap-3 border-b border-zinc-900 px-4 py-4 text-sm transition last:border-b-0 hover:bg-surface-hover sm:grid-cols-[1fr_120px_170px_130px] sm:items-center sm:px-5 sm:py-3"
@@ -1027,17 +1030,17 @@ onUnmounted(() => {
                             </div>
                         </div>
                         <div
-                            v-if="!loading && !error && entries.length > pageSize"
+                            v-if="!loading && !error && pagination.total_pages > 1"
                             class="flex flex-col gap-4 border-t border-zinc-800 bg-surface-light px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
                         >
                             <div class="text-sm font-bold text-zinc-500">
                                 Showing
                                 <span class="text-zinc-300">
-                                    {{ paginationStart }}–{{ paginationEnd }}
+                                    {{ pagination.from }}–{{ pagination.to }}
                                 </span>
                                 of
                                 <span class="text-zinc-300">
-                                    {{ entries.length }}
+                                    {{ pagination.total }}
                                 </span>
                                 items
                             </div>

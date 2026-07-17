@@ -13,12 +13,17 @@ class FileNodeClient
         private NodeClient $nodeClient
     ) {}
 
-    public function files(Cell $cell, string $path = ''): array
+    public function files(Cell $cell, string $path = '', int $page = 1, int $perPage = 250): array
     {
+        $page = max(1, $page);
+        $perPage = max(1, min(250, $perPage));
+
         return $this->nodeClient
             ->client($cell->node)
             ->get("/cells/{$cell->daemon_id}/files", [
                 'path' => $path,
+                'page' => $page,
+                'per_page' => $perPage,
             ])
             ->throw()
             ->json();

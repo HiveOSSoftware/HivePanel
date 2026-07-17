@@ -72,10 +72,16 @@ class CellFileController extends CellBaseController
 
         $this->abortIfLocked($cell, $cells);
 
+        $page = max(1, $request->integer('page', 1), );
+
+        $perPage = min(500, max(1, $request->integer('per_page', 250), ), );
+
         return response()->json(
             $files->files(
                 $cell,
                 $request->query('path', ''),
+                $page,
+                $perPage,
             ),
         );
     }
