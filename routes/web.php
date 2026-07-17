@@ -218,11 +218,15 @@ Route::middleware(['auth', 'verified'])->group(function () {
             ->middleware('cell.permission:' . CellPermissions::BACKUPS_VIEW);
         Route::post('/{id}/backups', [CellBackupController::class, 'create'])->name('backups.create')
             ->middleware('cell.permission:' . CellPermissions::BACKUPS_CREATE);
-        Route::delete('/{id}/backups/{name}', [CellBackupController::class, 'delete'])->name('backups.delete')
+        Route::delete('/{id}/backups/{backup}', [CellBackupController::class, 'delete'])->name('backups.delete')
             ->middleware('cell.permission:' . CellPermissions::BACKUPS_DELETE);
-        Route::post('/{id}/backups/{name}/restore', [CellBackupController::class, 'restore'])->name('backups.restore')
+        Route::post('/{id}/backups/{backup}/restore', [CellBackupController::class, 'restore'])->name('backups.restore')
             ->middleware('cell.permission:' . CellPermissions::BACKUPS_RESTORE);
-        Route::get('/{id}/backups/{name}/download', [CellBackupController::class, 'download'])->name('backups.download')
+        Route::get('/{id}/backups/{backup}/download', [CellBackupController::class, 'download'])->name('backups.download')
+            ->middleware('cell.permission:' . CellPermissions::BACKUPS_VIEW);
+        Route::get('/{id}/backups/{backup}/lock', [CellBackupController::class, 'lock'])->name('backups.lock')
+            ->middleware('cell.permission:' . CellPermissions::BACKUPS_VIEW);
+        Route::get('/{id}/backups/{backup}/unlock', [CellBackupController::class, 'unlock'])->name('backups.unlock')
             ->middleware('cell.permission:' . CellPermissions::BACKUPS_VIEW);
 
         Route::get('/{id}/importer', [CellImporterController::class, 'index'])->name('importer.index')
