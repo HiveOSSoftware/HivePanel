@@ -69,6 +69,75 @@ const entries = ref<FileEntry[]>([])
 const loading = ref(false)
 const error = ref('')
 const actionLoading = ref('')
+const pageSize = 250
+const currentPage = ref(1)
+
+const totalPages = computed(() => {
+    return Math.max(1, Math.ceil(entries.value.length / pageSize))
+})
+
+const paginatedEntries = computed(() => {
+    const start = (currentPage.value - 1) * pageSize
+    const end = start + pageSize
+
+    return entries.value.slice(start, end)
+})
+
+const paginationStart = computed(() => {
+    if (entries.value.length === 0) {
+        return 0
+    }
+
+    return (currentPage.value - 1) * pageSize + 1
+})
+
+const paginationEnd = computed(() => {
+    return Math.min(
+        currentPage.value * pageSize,
+        entries.value.length,
+    )
+})
+
+const visiblePageNumbers = computed(() => {
+    const total = totalPages.value
+    const current = currentPage.value
+    const pages: number[] = []
+
+    const start = Math.max(1, current - 2)
+    const end = Math.min(total, current + 2)
+
+    for (let page = start; page <= end; page++) {
+        pages.push(page)
+    }
+
+    return pages
+})
+
+function goToPage(page: number) {
+    const target = Math.min(
+        Math.max(page, 1),
+        totalPages.value,
+    )
+
+    if (target === currentPage.value) {
+        return
+    }
+
+    currentPage.value = target
+
+    window.scrollTo({
+        top: 0,
+        behavior: 'smooth',
+    })
+}
+
+function previousPage() {
+    goToPage(currentPage.value - 1)
+}
+
+function nextPage() {
+    goToPage(currentPage.value + 1)
+}
 
 const confirmOpen = ref(false)
 const confirmEntry = ref<FileEntry | null>(null)
@@ -396,7 +465,10 @@ function onUploadDrop(event: DragEvent) {
     uploadFiles(files, uploadType.value === 'folder')
 }
 
-async function loadFiles(path = currentPath.value) {
+async function loadFiles(
+    path = currentPath.value,
+    preservePage = false,
+) {
     if (!cellId.value) return
 
     loading.value = true
@@ -415,7 +487,13 @@ async function loadFiles(path = currentPath.value) {
         const data = await response.json()
 
         currentPath.value = data.path ?? path
+
+        if (!preservePage) {
+            currentPage.value = 1
+        }
+
         entries.value = (data.files ?? []).sort((a: FileEntry, b: FileEntry) => {
+            
             const aFolder = isFolder(a)
             const bFolder = isFolder(b)
 
@@ -518,7 +596,7 @@ async function createItem() {
             return
         }
 
-        await loadFiles()
+        await loadFiles(currentPath.value, true)
         closeCreate()
         showToast(createType.value === 'file' ? 'File created.' : 'Folder created.')
     } finally {
@@ -558,7 +636,7 @@ async function uploadFiles(files: FileList | null, folderUpload = false) {
             }
         }
 
-        await loadFiles()
+        await loadFiles(currentPath.value, true)
         closeUpload()
         showToast(folderUpload ? 'Folder uploaded.' : 'Files uploaded.')
     } finally {
@@ -597,7 +675,7 @@ async function uploadFromUrl() {
             return
         }
 
-        await loadFiles()
+        await loadFiles(currentPath.value, true)
         closeUpload()
         showToast('File uploaded from URL.')
     } finally {
@@ -643,7 +721,7 @@ async function deleteFile(entry: FileEntry) {
             return
         }
 
-        await loadFiles()
+        await loadFiles(currentPath.value, true)
         closeConfirm(true)
         showToast('Moved to recycle bin.')
     } finally {
@@ -675,7 +753,7 @@ async function restoreFile(entry: FileEntry) {
             return
         }
 
-        await loadFiles()
+        await loadFiles(currentPath.value, true)
         closeConfirm(true)
         showToast('Item restored.')
     } finally {
@@ -705,7 +783,7 @@ async function permanentDeleteFile(entry: FileEntry) {
             return
         }
 
-        await loadFiles()
+        await loadFiles(currentPath.value, true)
         closeConfirm(true)
         showToast('Item permanently deleted.')
     } finally {
@@ -776,7 +854,7 @@ onUnmounted(() => {
                                     Up
                                 </button>
 
-                                <button class="inline-flex items-center gap-2 rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 transition hover:border-hive hover:text-hive" @click="loadFiles()">
+                                <button class="inline-flex items-center gap-2 rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 transition hover:border-hive hover:text-hive" @click="loadFiles(currentPath, true)">
                                     <RefreshCw class="size-4" />
                                     Refresh
                                 </button>
@@ -884,7 +962,7 @@ onUnmounted(() => {
                         </div>
 
                         <div
-                            v-for="entry in entries"
+                            v-for="entry in paginatedEntries"
                             v-else
                             :key="entry.path"
                             class="grid cursor-pointer grid-cols-[1fr_auto] gap-3 border-b border-zinc-900 px-4 py-4 text-sm transition last:border-b-0 hover:bg-surface-hover sm:grid-cols-[1fr_120px_170px_130px] sm:items-center sm:px-5 sm:py-3"
@@ -946,6 +1024,87 @@ onUnmounted(() => {
                             <div class="col-span-2 flex flex-wrap gap-3 text-xs text-zinc-500 sm:hidden">
                                 <span>{{ isFolder(entry) ? 'Folder' : formatBytes(entry.size) }}</span>
                                 <span v-if="entry.modified_at">{{ entry.modified_at }}</span>
+                            </div>
+                        </div>
+                        <div
+                            v-if="!loading && !error && entries.length > pageSize"
+                            class="flex flex-col gap-4 border-t border-zinc-800 bg-surface-light px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+                        >
+                            <div class="text-sm font-bold text-zinc-500">
+                                Showing
+                                <span class="text-zinc-300">
+                                    {{ paginationStart }}–{{ paginationEnd }}
+                                </span>
+                                of
+                                <span class="text-zinc-300">
+                                    {{ entries.length }}
+                                </span>
+                                items
+                            </div>
+
+                            <div class="flex flex-wrap items-center gap-2">
+                                <button
+                                    type="button"
+                                    class="rounded-button border border-zinc-800 bg-surface px-3 py-2 text-sm font-bold text-zinc-400 transition hover:border-hive/50 hover:text-hive disabled:cursor-not-allowed disabled:opacity-40"
+                                    :disabled="currentPage === 1"
+                                    @click="previousPage"
+                                >
+                                    Previous
+                                </button>
+
+                                <button
+                                    v-if="visiblePageNumbers[0] > 1"
+                                    type="button"
+                                    class="flex size-9 items-center justify-center rounded-button border border-zinc-800 bg-surface text-sm font-black text-zinc-400 transition hover:border-hive/50 hover:text-hive"
+                                    @click="goToPage(1)"
+                                >
+                                    1
+                                </button>
+
+                                <span
+                                    v-if="visiblePageNumbers[0] > 2"
+                                    class="px-1 text-zinc-600"
+                                >
+                                    …
+                                </span>
+
+                                <button
+                                    v-for="page in visiblePageNumbers"
+                                    :key="page"
+                                    type="button"
+                                    class="flex size-9 items-center justify-center rounded-button border text-sm font-black transition"
+                                    :class="page === currentPage
+                                        ? 'border-hive bg-hive text-black'
+                                        : 'border-zinc-800 bg-surface text-zinc-400 hover:border-hive/50 hover:text-hive'"
+                                    @click="goToPage(page)"
+                                >
+                                    {{ page }}
+                                </button>
+
+                                <span
+                                    v-if="visiblePageNumbers[visiblePageNumbers.length - 1] < totalPages - 1"
+                                    class="px-1 text-zinc-600"
+                                >
+                                    …
+                                </span>
+
+                                <button
+                                    v-if="visiblePageNumbers[visiblePageNumbers.length - 1] < totalPages"
+                                    type="button"
+                                    class="flex size-9 items-center justify-center rounded-button border border-zinc-800 bg-surface text-sm font-black text-zinc-400 transition hover:border-hive/50 hover:text-hive"
+                                    @click="goToPage(totalPages)"
+                                >
+                                    {{ totalPages }}
+                                </button>
+
+                                <button
+                                    type="button"
+                                    class="rounded-button border border-zinc-800 bg-surface px-3 py-2 text-sm font-bold text-zinc-400 transition hover:border-hive/50 hover:text-hive disabled:cursor-not-allowed disabled:opacity-40"
+                                    :disabled="currentPage === totalPages"
+                                    @click="nextPage"
+                                >
+                                    Next
+                                </button>
                             </div>
                         </div>
                     </section>
