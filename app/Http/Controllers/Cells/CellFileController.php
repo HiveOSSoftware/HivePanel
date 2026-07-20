@@ -22,6 +22,11 @@ class CellFileController extends CellBaseController
         SftpAccessService $sftpAccess,
     ) {
         $cell = $this->panelCellOrFail($id);
+
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
+
         $workerCell = $this->getCellOrFail($cell, $cells);
         $user = request()->user();
 
@@ -29,7 +34,10 @@ class CellFileController extends CellBaseController
             return $this->lockedPage($workerCell);
         }
 
-        $sftpPermissions = $sftpAccess->resolve($cell, $user);
+        $sftpPermissions = $sftpAccess->resolve(
+            $cell,
+            $user,
+        );
 
         $credential = $cell->sftpCredentials()
             ->where('user_id', $user->id)
@@ -37,6 +45,11 @@ class CellFileController extends CellBaseController
 
         return Inertia::render('Cells/Files', [
             'cell' => $workerCell,
+            'mode' => 'live',
+            'initialPath' => '',
+
+            'mount' => null,
+            'backup' => null,
 
             'sftp' => [
                 'enabled' => (bool) (
@@ -48,14 +61,19 @@ class CellFileController extends CellBaseController
                 'port' => $cell->node?->sftp_port ?? 2022,
 
                 'username' => $credential?->username
-                    ?? $this->sftpUsername($cell, $user),
+                    ?? $this->sftpUsername(
+                        $cell,
+                        $user,
+                    ),
 
                 'has_password' => (bool) (
                     $credential &&
                     $credential->revoked_at === null
                 ),
 
-                'last_used_at' => $credential?->last_used_at?->toISOString(),
+                'last_used_at' => $credential
+                    ?->last_used_at
+                    ?->toISOString(),
 
                 'permissions' => $sftpPermissions,
             ],
@@ -69,6 +87,7 @@ class CellFileController extends CellBaseController
         FileNodeClient $files,
     ) {
         $cell = $this->panelCellOrFail($id);
+        $this->abortUnlessInstalled($cell);
 
         $this->abortIfLocked($cell, $cells);
 
@@ -89,11 +108,25 @@ class CellFileController extends CellBaseController
     public function download(
         string $id,
         Request $request,
+        CellNodeClient $cells,
         FileNodeClient $files,
         AuditLogger $audit,
     ) {
         $cell = $this->panelCellOrFail($id);
-        $path = $request->query('path', '');
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
+        $this->abortIfLocked($cell, $cells);
+
+        $path = trim(
+            (string) $request->query('path', ''),
+        );
+
+        abort_if(
+            $path === '',
+            400,
+            'Missing file path.',
+        );
 
         $audit->log(
             AuditEvent::FILE_DOWNLOADED,
@@ -104,7 +137,10 @@ class CellFileController extends CellBaseController
             ],
         );
 
-        return $files->downloadFile($cell, $path);
+        return $files->downloadFile(
+            $cell,
+            $path,
+        );
     }
 
     public function edit(
@@ -113,6 +149,9 @@ class CellFileController extends CellBaseController
         CellNodeClient $cells,
     ) {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
         $workerCell = $this->getCellOrFail($cell, $cells);
 
         if ($this->isLocked($workerCell)) {
@@ -132,6 +171,9 @@ class CellFileController extends CellBaseController
         FileNodeClient $files,
     ) {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $this->abortIfLocked($cell, $cells);
 
@@ -151,6 +193,9 @@ class CellFileController extends CellBaseController
         AuditLogger $audit,
     ) {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $this->abortIfLocked($cell, $cells);
 
@@ -185,6 +230,9 @@ class CellFileController extends CellBaseController
         AuditLogger $audit,
     ) {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $this->abortIfLocked($cell, $cells);
 
@@ -218,6 +266,9 @@ class CellFileController extends CellBaseController
         AuditLogger $audit,
     ) {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $this->abortIfLocked($cell, $cells);
 
@@ -250,6 +301,9 @@ class CellFileController extends CellBaseController
         AuditLogger $audit,
     ) {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $this->abortIfLocked($cell, $cells);
 
@@ -287,6 +341,9 @@ class CellFileController extends CellBaseController
         AuditLogger $audit,
     ) {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $this->abortIfLocked($cell, $cells);
 
@@ -319,6 +376,9 @@ class CellFileController extends CellBaseController
         AuditLogger $audit,
     ) {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $this->abortIfLocked($cell, $cells);
 
@@ -351,6 +411,9 @@ class CellFileController extends CellBaseController
         AuditLogger $audit,
     ) {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $this->abortIfLocked($cell, $cells);
 
@@ -387,6 +450,9 @@ class CellFileController extends CellBaseController
         AuditLogger $audit,
     ) {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $this->abortIfLocked($cell, $cells);
 

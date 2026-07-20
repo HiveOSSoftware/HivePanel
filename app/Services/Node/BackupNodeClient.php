@@ -97,7 +97,9 @@ class BackupNodeClient
         return $this->nodeClient
             ->client($cell->node)
             ->post(
-                "/cells/{$this->cellID($cell)}/backups/"
+                '/cells/'
+                .rawurlencode($this->cellID($cell))
+                .'/backups/'
                 .rawurlencode($backup->id)
                 .'/mount',
                 [
@@ -115,7 +117,9 @@ class BackupNodeClient
         return $this->nodeClient
             ->client($cell->node)
             ->delete(
-                "/cells/{$this->cellID($cell)}/backup-mounts/"
+                '/cells/'
+                .rawurlencode($this->cellID($cell))
+                .'/backup-mounts/'
                 .rawurlencode($mount->id),
             )
             ->throw()
@@ -132,7 +136,9 @@ class BackupNodeClient
         return $this->nodeClient
             ->client($cell->node)
             ->get(
-                "/cells/{$this->cellID($cell)}/backup-mounts/"
+                '/cells/'
+                .rawurlencode($this->cellID($cell))
+                .'/backup-mounts/'
                 .rawurlencode($mount->id)
                 .'/files',
                 [

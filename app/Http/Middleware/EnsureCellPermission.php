@@ -16,7 +16,7 @@ class EnsureCellPermission
             ? $routeCell
             : Cell::query()
                 ->where('id', $routeCell)
-                ->orWhere('uuid', $routeCell)
+                // ->orWhere('uuid', $routeCell)
                 ->orWhere('daemon_id', $routeCell)
                 ->first();
 

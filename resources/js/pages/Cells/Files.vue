@@ -32,13 +32,47 @@ type SftpDetails = {
     last_used_at?: string | null
 }
 
-const props = defineProps<{
+type FileManagerMode = 'live' | 'backup'
+
+type BackupMountDetails = {
+    id: string
+    status: string
+    extracted_size?: number | null
+    mounted_at?: string | null
+    expires_at?: string | null
+}
+
+type BackupDetails = {
+    id: string
+    name: string
+}
+
+const props = withDefaults(defineProps<{
     cell: any
-    sftp: SftpDetails
-}>()
+    sftp?: SftpDetails | null
+    mode?: FileManagerMode
+    mount?: BackupMountDetails | null
+    backup?: BackupDetails | null
+    initialPath?: string
+}>(), {
+    sftp: null,
+    mode: 'live',
+    mount: null,
+    backup: null,
+    initialPath: '',
+})
+
+const isBackupMode = computed(() => props.mode === 'backup')
+const isReadOnly = computed(() => isBackupMode.value)
 
 const sftpDetails = ref<SftpDetails>({
-    ...props.sftp,
+    enabled: props.sftp?.enabled ?? false,
+    host: props.sftp?.host ?? '',
+    port: props.sftp?.port ?? 22,
+    username: props.sftp?.username ?? '',
+    has_password: props.sftp?.has_password ?? false,
+    password: props.sftp?.password ?? null,
+    last_used_at: props.sftp?.last_used_at ?? null,
 })
 
 const generatedSftpPassword = ref<string | null>(
@@ -64,7 +98,7 @@ type ConfirmAction = 'delete' | 'restore' | 'permanent-delete'
 type CreateType = 'file' | 'folder'
 type UploadType = 'files' | 'folder' | 'url'
 
-const currentPath = ref('')
+const currentPath = ref(props.initialPath ?? '')
 const entries = ref<FileEntry[]>([])
 const loading = ref(false)
 const error = ref('')
@@ -170,7 +204,11 @@ const breadcrumbs = computed(() => {
 })
 
 const confirmTitle = computed(() => {
-    if (confirmAction.value === 'restore') return 'Restore File'
+    if (confirmAction.value === 'restore') {
+        return isBackupMode.value
+            ? 'Restore From Backup'
+            : 'Restore File'
+    }
     if (confirmAction.value === 'permanent-delete') return 'Delete Forever'
     return 'Move to Recycle Bin'
 })
@@ -178,7 +216,11 @@ const confirmTitle = computed(() => {
 const confirmMessage = computed(() => {
     const name = confirmEntry.value?.name ?? 'this item'
 
-    if (confirmAction.value === 'restore') return `Restore "${name}" back to its original location?`
+    if (confirmAction.value === 'restore') {
+        return isBackupMode.value
+            ? `Restore "${name}" into the live server files? Existing files at the same path may be replaced.`
+            : `Restore "${name}" back to its original location?`
+    }
     if (confirmAction.value === 'permanent-delete') return `Permanently delete "${name}"? This cannot be undone.`
 
     return `Move "${name}" to the recycle bin?`
@@ -377,6 +419,32 @@ function fullPath(name: string) {
     return currentPath.value ? `${currentPath.value}/${name}` : name
 }
 
+function mountedBackupBaseUrl() {
+    if (!cellId.value || !props.mount?.id) {
+        return ''
+    }
+
+    return `/cells/${cellId.value}/backup-mounts/${encodeURIComponent(props.mount.id)}`
+}
+
+function filesJsonUrl(params: URLSearchParams) {
+    if (isBackupMode.value) {
+        return `${mountedBackupBaseUrl()}/files-json?${params.toString()}`
+    }
+
+    return `/cells/${cellId.value}/files-json?${params.toString()}`
+}
+
+function fileDownloadUrl(entry: FileEntry) {
+    const encodedPath = encodeURIComponent(entry.path)
+
+    if (isBackupMode.value) {
+        return `${mountedBackupBaseUrl()}/download?path=${encodedPath}`
+    }
+
+    return `/cells/${cellId.value}/files/download?path=${encodedPath}`
+}
+
 function formatBytes(bytes?: number) {
     const value = bytes ?? 0
 
@@ -404,7 +472,7 @@ function hasFiles(event: DragEvent) {
 }
 
 function onWindowDragEnter(event: DragEvent) {
-    if (!hasFiles(event)) return
+    if (isReadOnly.value || !hasFiles(event)) return
 
     event.preventDefault()
     dragDepth++
@@ -412,14 +480,14 @@ function onWindowDragEnter(event: DragEvent) {
 }
 
 function onWindowDragOver(event: DragEvent) {
-    if (!hasFiles(event)) return
+    if (isReadOnly.value || !hasFiles(event)) return
 
     event.preventDefault()
     draggingUpload.value = true
 }
 
 function onWindowDragLeave(event: DragEvent) {
-    if (!hasFiles(event)) return
+    if (isReadOnly.value || !hasFiles(event)) return
 
     event.preventDefault()
     dragDepth = Math.max(0, dragDepth - 1)
@@ -430,7 +498,7 @@ function onWindowDragLeave(event: DragEvent) {
 }
 
 function onWindowDrop(event: DragEvent) {
-    if (!hasFiles(event)) return
+    if (isReadOnly.value || !hasFiles(event)) return
 
     event.preventDefault()
 
@@ -442,6 +510,8 @@ function onWindowDrop(event: DragEvent) {
 }
 
 function onUploadDrop(event: DragEvent) {
+    if (isReadOnly.value) return
+
     event.preventDefault()
 
     dragDepth = 0
@@ -472,10 +542,11 @@ async function loadFiles(
         })
 
         const response = await fetch(
-            `/cells/${cellId.value}/files-json?${params.toString()}`,
+            filesJsonUrl(params),
             {
                 headers: {
                     Accept: 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
                 },
             },
         )
@@ -518,6 +589,10 @@ function openEntry(entry: FileEntry) {
         return
     }
 
+    if (isBackupMode.value) {
+        return
+    }
+
     router.visit(`/cells/${cellId.value}/files/edit?path=${encodeURIComponent(entry.path)}`)
 }
 
@@ -535,7 +610,7 @@ function goUp() {
 }
 
 function downloadFile(entry: FileEntry) {
-    window.location.href = `/cells/${cellId.value}/files/download?path=${encodeURIComponent(entry.path)}`
+    window.location.href = fileDownloadUrl(entry)
 }
 
 function openConfirm(action: ConfirmAction, entry: FileEntry) {
@@ -573,7 +648,7 @@ function closeUpload() {
 }
 
 async function createItem() {
-    if (!cellId.value || !createName.value.trim()) return
+    if (isReadOnly.value || !cellId.value || !createName.value.trim()) return
 
     const path = fullPath(createName.value.trim())
     const endpoint = createType.value === 'file' ? 'file' : 'folder'
@@ -608,7 +683,7 @@ async function createItem() {
 }
 
 async function uploadFiles(files: FileList | null, folderUpload = false) {
-    if (!cellId.value || !files || files.length === 0) return
+    if (isReadOnly.value || !cellId.value || !files || files.length === 0) return
 
     actionLoading.value = 'upload'
     error.value = ''
@@ -650,7 +725,7 @@ async function uploadFiles(files: FileList | null, folderUpload = false) {
 }
 
 async function uploadFromUrl() {
-    if (!cellId.value || !uploadUrl.value.trim() || !uploadUrlName.value.trim()) return
+    if (isReadOnly.value || !cellId.value || !uploadUrl.value.trim() || !uploadUrlName.value.trim()) return
 
     const path = fullPath(uploadUrlName.value.trim())
 
@@ -703,7 +778,7 @@ async function confirmSelectedAction() {
 }
 
 async function deleteFile(entry: FileEntry) {
-    if (!cellId.value) return
+    if (isReadOnly.value || !cellId.value) return
 
     actionLoading.value = entry.path
     error.value = ''
@@ -735,11 +810,20 @@ async function deleteFile(entry: FileEntry) {
 async function restoreFile(entry: FileEntry) {
     if (!cellId.value) return
 
+    if (isBackupMode.value && !props.mount?.id) {
+        showError('This backup mount is unavailable.')
+        return
+    }
+
     actionLoading.value = entry.path
     error.value = ''
 
     try {
-        const response = await fetch(`/cells/${cellId.value}/files/restore`, {
+        const endpoint = isBackupMode.value
+            ? `${mountedBackupBaseUrl()}/restore`
+            : `/cells/${cellId.value}/files/restore`
+
+        const response = await fetch(endpoint, {
             method: 'POST',
             credentials: 'same-origin',
             headers: {
@@ -752,20 +836,32 @@ async function restoreFile(entry: FileEntry) {
         })
 
         if (!response.ok) {
-            showError(await responseError(response, 'Failed to restore item.'))
+            showError(await responseError(
+                response,
+                isBackupMode.value
+                    ? 'Failed to restore item from backup.'
+                    : 'Failed to restore item.',
+            ))
             return
         }
 
-        await loadFiles(currentPath.value, true)
+        if (!isBackupMode.value) {
+            await loadFiles(currentPath.value, true)
+        }
+
         closeConfirm(true)
-        showToast('Item restored.')
+        showToast(
+            isBackupMode.value
+                ? 'Item restored from backup.'
+                : 'Item restored.',
+        )
     } finally {
         actionLoading.value = ''
     }
 }
 
 async function permanentDeleteFile(entry: FileEntry) {
-    if (!cellId.value) return
+    if (isReadOnly.value || !cellId.value) return
 
     actionLoading.value = entry.path
     error.value = ''
@@ -795,19 +891,23 @@ async function permanentDeleteFile(entry: FileEntry) {
 }
 
 onMounted(() => {
-    loadFiles('')
+    loadFiles(props.initialPath ?? '')
 
-    window.addEventListener('dragenter', onWindowDragEnter)
-    window.addEventListener('dragover', onWindowDragOver)
-    window.addEventListener('dragleave', onWindowDragLeave)
-    window.addEventListener('drop', onWindowDrop)
+    if (!isReadOnly.value) {
+        window.addEventListener('dragenter', onWindowDragEnter)
+        window.addEventListener('dragover', onWindowDragOver)
+        window.addEventListener('dragleave', onWindowDragLeave)
+        window.addEventListener('drop', onWindowDrop)
+    }
 })
 
 onUnmounted(() => {
-    window.removeEventListener('dragenter', onWindowDragEnter)
-    window.removeEventListener('dragover', onWindowDragOver)
-    window.removeEventListener('dragleave', onWindowDragLeave)
-    window.removeEventListener('drop', onWindowDrop)
+    if (!isReadOnly.value) {
+        window.removeEventListener('dragenter', onWindowDragEnter)
+        window.removeEventListener('dragover', onWindowDragOver)
+        window.removeEventListener('dragleave', onWindowDragLeave)
+        window.removeEventListener('drop', onWindowDrop)
+    }
 })
 </script>
 
@@ -817,7 +917,11 @@ onUnmounted(() => {
         :active-cell="cell"
         :active-cell-status="cell.status ?? 'offline'"
     >
-        <Head :title="`${cell.name} Files`" />
+        <Head
+            :title="isBackupMode
+                ? `${cell.name} Backup Files`
+                : `${cell.name} Files`"
+        />
 
         <div class="min-h-screen bg-surface-dark text-white">
             <main class="px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
@@ -826,7 +930,7 @@ onUnmounted(() => {
                         <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                             <div>
                                 <h1 class="text-2xl font-black sm:text-3xl">
-                                    File Manager
+                                    {{ isBackupMode ? 'Backup File Browser' : 'File Manager' }}
                                 </h1>
 
                                 <div class="mt-2 flex flex-wrap items-center gap-2 text-sm text-zinc-400">
@@ -848,6 +952,20 @@ onUnmounted(() => {
                                     >
                                         Recycle Bin
                                     </span>
+
+                                    <span
+                                        v-if="isBackupMode"
+                                        class="rounded-full border border-hive/30 bg-hive/10 px-2 py-0.5 text-xs font-bold text-hive"
+                                    >
+                                        {{ backup?.name ?? 'Mounted Backup' }}
+                                    </span>
+
+                                    <span
+                                        v-if="isBackupMode"
+                                        class="rounded-full border border-zinc-700 bg-surface-light px-2 py-0.5 text-xs font-bold text-zinc-400"
+                                    >
+                                        Read Only
+                                    </span>
                                 </div>
                             </div>
 
@@ -862,12 +980,16 @@ onUnmounted(() => {
                                     Refresh
                                 </button>
 
-                                <button class="inline-flex items-center gap-2 rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 transition hover:border-hive hover:text-hive" @click="sftpOpen = true">
+                                <button
+                                    v-if="!isBackupMode"
+                                    class="inline-flex items-center gap-2 rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 transition hover:border-hive hover:text-hive"
+                                    @click="sftpOpen = true"
+                                >
                                     <Server class="size-4" />
                                     SFTP
                                 </button>
 
-                                <div class="relative">
+                                <div v-if="!isBackupMode" class="relative">
                                     <button
                                         class="inline-flex items-center gap-2 rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 transition hover:border-hive hover:text-hive"
                                         @click="createMenuOpen = !createMenuOpen; uploadMenuOpen = false"
@@ -900,7 +1022,7 @@ onUnmounted(() => {
                                     </div>
                                 </div>
 
-                                <div class="relative">
+                                <div v-if="!isBackupMode" class="relative">
                                     <button
                                         class="inline-flex items-center gap-2 rounded-button border border-hive bg-hive px-4 py-2 text-sm font-black text-white transition hover:bg-hive-light"
                                         @click="uploadMenuOpen = !uploadMenuOpen; createMenuOpen = false"
@@ -1003,7 +1125,18 @@ onUnmounted(() => {
                                     <Download class="size-4" />
                                 </button>
 
-                                <template v-if="isRecycleBin">
+                                <template v-if="isBackupMode">
+                                    <button
+                                        class="text-zinc-500 transition hover:text-status-success disabled:opacity-50"
+                                        :disabled="actionLoading === entry.path"
+                                        title="Restore to live files"
+                                        @click.stop="openConfirm('restore', entry)"
+                                    >
+                                        <RotateCcw class="size-4" />
+                                    </button>
+                                </template>
+
+                                <template v-else-if="isRecycleBin">
                                     <button class="text-zinc-500 transition hover:text-status-success disabled:opacity-50" :disabled="actionLoading === entry.path" title="Restore" @click.stop="openConfirm('restore', entry)">
                                         <RotateCcw class="size-4" />
                                     </button>
@@ -1115,10 +1248,10 @@ onUnmounted(() => {
             </main>
         </div>
 
-        <input ref="fileInput" type="file" class="hidden" multiple @change="uploadFiles(($event.target as HTMLInputElement).files, false)" />
-        <input ref="folderInput" type="file" class="hidden" multiple webkitdirectory @change="uploadFiles(($event.target as HTMLInputElement).files, true)" />
+        <input v-if="!isBackupMode" ref="fileInput" type="file" class="hidden" multiple @change="uploadFiles(($event.target as HTMLInputElement).files, false)" />
+        <input v-if="!isBackupMode" ref="folderInput" type="file" class="hidden" multiple webkitdirectory @change="uploadFiles(($event.target as HTMLInputElement).files, true)" />
 
-        <div v-if="uploadOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+        <div v-if="uploadOpen && !isBackupMode" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
             <div class="w-full max-w-md rounded-panel border border-zinc-800 bg-surface p-6">
                 <h2 class="text-xl font-black text-white">
                     {{ uploadType === 'url' ? 'Upload From URL' : uploadType === 'folder' ? 'Upload Folder' : 'Upload Files' }}
@@ -1197,7 +1330,7 @@ onUnmounted(() => {
             </div>
         </div>
 
-        <div v-if="createOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+        <div v-if="createOpen && !isBackupMode" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
             <div class="w-full max-w-md rounded-panel border border-zinc-800 bg-surface p-6">
                 <h2 class="text-xl font-black text-white">
                     Create {{ createType === 'file' ? 'File' : 'Folder' }}
@@ -1227,7 +1360,7 @@ onUnmounted(() => {
         </div>
 
         <div
-            v-if="sftpOpen"
+            v-if="sftpOpen && !isBackupMode"
             class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
             @click.self="sftpOpen = false"
         >
@@ -1549,7 +1682,7 @@ onUnmounted(() => {
         </div>
 
         <div
-            v-if="draggingUpload"
+            v-if="draggingUpload && !isBackupMode"
             class="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
         >
             <div class="pointer-events-none w-full max-w-md rounded-panel border border-hive bg-surface p-8 text-center shadow-hive">

@@ -60,10 +60,7 @@ class BackupMount extends Model
         return $this->status->isBrowsable()
             && $this->mounted_at !== null
             && $this->unmounted_at === null
-            && (
-                $this->expires_at === null
-                || $this->expires_at->isFuture()
-            );
+            && ! $this->hasExpired();
     }
 
     public function hasExpired(): bool
@@ -90,6 +87,7 @@ class BackupMount extends Model
     {
         $this->forceFill([
             'status' => BackupMountStatus::UNMOUNTING,
+            'failure_reason' => null,
         ])->save();
     }
 
@@ -98,6 +96,7 @@ class BackupMount extends Model
         $this->forceFill([
             'status' => BackupMountStatus::UNMOUNTED,
             'worker_mount_path' => null,
+            'failure_reason' => null,
             'unmounted_at' => now(),
         ])->save();
     }
@@ -108,6 +107,7 @@ class BackupMount extends Model
             'status' => BackupMountStatus::FAILED,
             'failure_reason' => $reason,
             'worker_mount_path' => null,
+            'unmounted_at' => now(),
         ])->save();
     }
 }

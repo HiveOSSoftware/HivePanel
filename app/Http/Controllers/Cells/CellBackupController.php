@@ -20,6 +20,9 @@ class CellBackupController extends CellBaseController
         CellNodeClient $cells
     ): Response {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
         $workerCell = $this->getCellOrFail($cell, $cells);
 
         $backups = $cell->backups()
@@ -80,11 +83,62 @@ class CellBackupController extends CellBaseController
     public function json(string $id): JsonResponse
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $backups = $cell->backups()
-            ->with('user:id,name')
+            ->with([
+                'user:id,name',
+                'mounts' => fn ($query) => $query
+                    ->whereIn('status', [
+                        'mounting',
+                        'mounted',
+                        'unmounting',
+                    ])
+                    ->latest(),
+            ])
             ->latest()
-            ->paginate(20);
+            ->paginate(20)
+            ->through(fn (Backup $backup) => [
+                'id' => $backup->id,
+                'name' => $backup->name,
+                'status' => $backup->status->value,
+                'status_label' => $backup->status->label(),
+                'archive_name' => $backup->archive_name,
+                'size' => $backup->size,
+                'checksum' => $backup->checksum,
+                'checksum_algorithm' => $backup->checksum_algorithm,
+                'is_locked' => $backup->is_locked,
+                'is_automatic' => $backup->is_automatic,
+                'ignored_files' => $backup->ignored_files,
+                'failure_reason' => $backup->failure_reason,
+                'started_at' => $backup->started_at?->toIso8601String(),
+                'completed_at' => $backup->completed_at?->toIso8601String(),
+                'created_at' => $backup->created_at?->toIso8601String(),
+                'updated_at' => $backup->updated_at?->toIso8601String(),
+
+                'user' => $backup->user
+                    ? [
+                        'id' => $backup->user->id,
+                        'name' => $backup->user->name,
+                    ]
+                    : null,
+
+                'can_download' => $backup->isAvailable(),
+                'can_restore' => $backup->canRestore(),
+                'can_delete' => $backup->canDelete(),
+
+                'active_mount' => $backup->mounts
+                    ->first()
+                    ?->only([
+                        'id',
+                        'status',
+                        'extracted_size',
+                        'mounted_at',
+                        'expires_at',
+                    ]),
+            ]);
 
         return response()->json($backups);
     }
@@ -97,6 +151,9 @@ class CellBackupController extends CellBaseController
         AuditLogger $audit
     ): JsonResponse {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $this->abortIfLocked($cell, $cells);
 
@@ -152,6 +209,9 @@ class CellBackupController extends CellBaseController
         AuditLogger $audit
     ): JsonResponse {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $this->abortIfLocked($cell, $cells);
 
@@ -188,6 +248,9 @@ class CellBackupController extends CellBaseController
         AuditLogger $audit
     ): JsonResponse {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $this->abortIfLocked($cell, $cells);
 
@@ -221,6 +284,9 @@ class CellBackupController extends CellBaseController
         AuditLogger $audit
     ): StreamedResponse {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $backupModel = $this->backupOrFail(
             $cell->id,
@@ -309,6 +375,9 @@ class CellBackupController extends CellBaseController
         AuditLogger $audit
     ): JsonResponse {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $backupModel = $this->backupOrFail(
             $cell->id,
@@ -341,6 +410,9 @@ class CellBackupController extends CellBaseController
         AuditLogger $audit
     ): JsonResponse {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $backupModel = $this->backupOrFail(
             $cell->id,

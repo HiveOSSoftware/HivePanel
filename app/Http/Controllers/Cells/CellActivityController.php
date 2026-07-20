@@ -11,6 +11,9 @@ class CellActivityController extends CellBaseController
     public function index(string $id)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         return Inertia::render('Cells/Activity', [
             'cell' => [
@@ -30,6 +33,7 @@ class CellActivityController extends CellBaseController
     public function json(string $id)
     {
         $cell = $this->panelCellOrFail($id);
+        $this->abortUnlessInstalled($cell);
 
         return response()->json([
             'logs' => $this->logs($cell->id),
