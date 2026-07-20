@@ -13,6 +13,9 @@ class CellSettingsController extends CellBaseController
     public function index(string $id, CellNodeClient $cells)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
         $workerCell = $this->getCellOrFail($cell, $cells);
 
         return Inertia::render('Cells/Settings', [
@@ -23,6 +26,9 @@ class CellSettingsController extends CellBaseController
     public function update(string $id, Request $request, CellNodeClient $cells, AuditLogger $audit)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $this->abortIfLocked($cell, $cells);
 
@@ -50,6 +56,9 @@ class CellSettingsController extends CellBaseController
     public function utility(string $id, string $utility, CellNodeClient $cells, AuditLogger $audit)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $this->abortIfLocked($cell, $cells);
 

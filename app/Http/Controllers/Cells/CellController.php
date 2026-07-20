@@ -31,6 +31,9 @@ class CellController extends CellBaseController
     public function show(string $id, CellNodeClient $cells)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
         $workerCell = $this->getCellOrFail($cell, $cells);
 
         return Inertia::render('Cells/Show', [

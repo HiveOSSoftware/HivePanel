@@ -14,6 +14,9 @@ class CellConfigController extends CellBaseController
     public function index(string $id, CellNodeClient $cells)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
         $workerCell = $this->getCellOrFail($cell, $cells);
 
         return Inertia::render('Cells/Config', [
@@ -25,6 +28,9 @@ class CellConfigController extends CellBaseController
     public function json(string $id, Request $request, FileNodeClient $files)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         return response()->json(
             $files->readFile($cell, $request->query('path', 'server.properties'))
@@ -39,6 +45,9 @@ class CellConfigController extends CellBaseController
         AuditLogger $audit
     ) {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $this->abortIfLocked($cell, $cells);
 

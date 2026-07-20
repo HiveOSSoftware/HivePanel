@@ -19,6 +19,9 @@ class CellSftpCredentialController extends CellBaseController
         SftpAccessService $access,
     ): JsonResponse {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
         $user = $request->user();
 
         abort_unless(
@@ -62,6 +65,9 @@ class CellSftpCredentialController extends CellBaseController
         SftpAccessService $access,
     ): JsonResponse {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
         $user = $request->user();
 
         abort_unless(

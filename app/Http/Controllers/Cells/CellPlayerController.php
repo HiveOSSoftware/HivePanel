@@ -14,6 +14,9 @@ class CellPlayerController extends CellBaseController
     public function index(string $id, CellNodeClient $cells)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
         $workerCell = $this->getCellOrFail($cell, $cells);
 
         return Inertia::render('Cells/Players', [
@@ -24,6 +27,9 @@ class CellPlayerController extends CellBaseController
     public function json(string $id, PlayerNodeClient $players)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         return response()->json(
             $players->players($cell)
@@ -39,6 +45,9 @@ class CellPlayerController extends CellBaseController
         AuditLogger $audit
     ) {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $this->abortIfLocked($cell, $cells);
 

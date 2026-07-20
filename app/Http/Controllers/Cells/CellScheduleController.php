@@ -27,6 +27,9 @@ class CellScheduleController extends CellBaseController
     public function index(string $id, CellNodeClient $cells)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
         $workerCell = $this->getCellOrFail($cell, $cells);
 
         return Inertia::render('Cells/Schedules', [
@@ -38,6 +41,9 @@ class CellScheduleController extends CellBaseController
     public function show(string $id, int|string $scheduleId, CellNodeClient $cells)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
         $workerCell = $this->getCellOrFail($cell, $cells);
 
         $schedule = $this->scheduleForCellOrFail($cell->id, $scheduleId)
@@ -59,6 +65,9 @@ class CellScheduleController extends CellBaseController
     public function store(string $id, Request $request, AuditLogger $audit)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
         $data = $this->validated($request);
 
         $schedule = ServerSchedule::create([
@@ -90,6 +99,9 @@ class CellScheduleController extends CellBaseController
     public function update(string $id, int|string $scheduleId, Request $request, AuditLogger $audit)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
         $schedule = $this->scheduleForCellOrFail($cell->id, $scheduleId);
 
         $wasEnabled = (bool) $schedule->enabled;
@@ -131,6 +143,9 @@ class CellScheduleController extends CellBaseController
     public function destroy(string $id, int|string $scheduleId, AuditLogger $audit)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
         $schedule = $this->scheduleForCellOrFail($cell->id, $scheduleId);
 
         $name = $schedule->name;
@@ -151,6 +166,9 @@ class CellScheduleController extends CellBaseController
     public function run(string $id, int|string $scheduleId, AuditLogger $audit)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
         $schedule = $this->scheduleForCellOrFail($cell->id, $scheduleId);
 
         RunServerScheduleJob::dispatch($schedule->id);
@@ -170,6 +188,9 @@ class CellScheduleController extends CellBaseController
     public function json(string $id)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         return response()->json([
             'schedules' => $this->scheduleQuery($cell->id)->get(),
@@ -179,6 +200,9 @@ class CellScheduleController extends CellBaseController
     public function templates(string $id)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $comb = $cell->comb;
 

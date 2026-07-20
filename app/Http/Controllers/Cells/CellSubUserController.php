@@ -12,6 +12,9 @@ class CellSubUserController extends CellBaseController
     public function index(string $id)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         abort_unless($cell->userCan(auth()->user(), CellPermissions::USERS_VIEW), 403);
 
@@ -38,6 +41,9 @@ class CellSubUserController extends CellBaseController
     public function create(string $id)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         abort_unless($cell->userCan(auth()->user(), CellPermissions::USERS_INVITE), 403);
 
@@ -50,6 +56,9 @@ class CellSubUserController extends CellBaseController
     public function store(string $id, Request $request)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         abort_unless($cell->userCan(auth()->user(), CellPermissions::USERS_INVITE), 403);
 
@@ -77,6 +86,9 @@ class CellSubUserController extends CellBaseController
     public function edit(string $id, User $user)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         abort_unless($cell->userCan(auth()->user(), CellPermissions::USERS_UPDATE), 403);
 
@@ -104,6 +116,9 @@ class CellSubUserController extends CellBaseController
     public function update(string $id, User $user, Request $request)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         abort_unless($cell->userCan(auth()->user(), CellPermissions::USERS_UPDATE), 403);
 
@@ -125,6 +140,9 @@ class CellSubUserController extends CellBaseController
     public function destroy(string $id, User $user)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         abort_unless($cell->userCan(auth()->user(), CellPermissions::USERS_REMOVE), 403);
 

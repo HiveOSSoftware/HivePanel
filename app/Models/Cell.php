@@ -4,6 +4,8 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use App\Enums\CellInstallStatus;
 
 class Cell extends Model
 {
@@ -20,11 +22,19 @@ class Cell extends Model
         'name',
         'comb',
         'metadata',
+        'install_status',
+        'install_failure_reason',
+        'installed_at',
     ];
 
-    protected $casts = [
-        'metadata' => 'array',
-    ];
+    protected function casts(): array
+    {
+        return [
+            'metadata' => 'array',
+            'install_status' => CellInstallStatus::class,
+            'installed_at' => 'datetime',
+        ];
+    }
 
     public function scopeVisibleTo($query, User $user)
     {

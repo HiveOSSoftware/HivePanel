@@ -12,6 +12,9 @@ class CellConsoleController extends CellBaseController
     public function statsJson(string $id, CellNodeClient $cells)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         try {
             return response()->json($cells->stats($cell));
@@ -32,6 +35,9 @@ class CellConsoleController extends CellBaseController
     public function consoleJson(string $id, CellNodeClient $cells)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         return response()->json($cells->console($cell));
     }
@@ -39,6 +45,9 @@ class CellConsoleController extends CellBaseController
     public function command(string $id, Request $request, CellNodeClient $cells, AuditLogger $audit)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $this->abortIfLocked($cell, $cells);
 
@@ -63,6 +72,9 @@ class CellConsoleController extends CellBaseController
     public function consoleSession(String $id, CellNodeClient $cells)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
         
         $session = $cells->createConsoleSession($cell);
 

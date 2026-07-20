@@ -14,6 +14,9 @@ class CellImporterController extends CellBaseController
     public function index(string $id, CellNodeClient $cells)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
         $workerCell = $this->getCellOrFail($cell, $cells);
 
         return Inertia::render('Cells/Importer', [
@@ -28,6 +31,9 @@ class CellImporterController extends CellBaseController
         AuditLogger $audit
     ) {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $data = $request->validate([
             'protocol' => ['required', 'string', 'in:sftp,ftp,ftps'],
@@ -64,6 +70,9 @@ class CellImporterController extends CellBaseController
         AuditLogger $audit
     ) {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $this->abortIfLocked($cell, $cells);
 
@@ -98,6 +107,9 @@ class CellImporterController extends CellBaseController
     public function status(string $id, ImporterNodeClient $importer)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         return response()->json(
             $importer->importerStatus($cell)

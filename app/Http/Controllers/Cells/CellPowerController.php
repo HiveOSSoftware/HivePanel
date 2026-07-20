@@ -11,6 +11,9 @@ class CellPowerController extends CellBaseController
     public function start(string $id, CellNodeClient $cells, AuditLogger $audit)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $this->abortIfLocked($cell, $cells);
 
@@ -28,6 +31,9 @@ class CellPowerController extends CellBaseController
     public function stop(string $id, CellNodeClient $cells, AuditLogger $audit)
     {
         $cell = $this->panelCellOrFail($id);
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
 
         $this->abortIfLocked($cell, $cells);
 
