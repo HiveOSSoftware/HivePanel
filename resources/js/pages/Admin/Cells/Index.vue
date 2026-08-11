@@ -56,6 +56,25 @@ function deleteCell() {
     })
 }
 
+function installStatusClass(status?: string) {
+    switch (status) {
+        case 'installed':
+            return 'border-status-success/30 bg-status-success/10 text-status-success'
+
+        case 'installing':
+            return 'border-hive/30 bg-hive/10 text-hive'
+
+        case 'pending':
+            return 'border-status-warning/30 bg-status-warning/10 text-status-warning'
+
+        case 'failed':
+            return 'border-status-danger/30 bg-status-danger/10 text-status-danger'
+
+        default:
+            return 'border-zinc-700 bg-zinc-800 text-zinc-400'
+    }
+}
+
 function formatDate(value?: string) {
     if (!value) return 'Never'
     return new Date(value).toLocaleString()
@@ -149,6 +168,9 @@ function formatDate(value?: string) {
                                         <th class="px-5 py-4 text-left text-xs font-black uppercase tracking-wide text-zinc-500">Node</th>
                                         <th class="px-5 py-4 text-left text-xs font-black uppercase tracking-wide text-zinc-500">Allocation</th>
                                         <th class="px-5 py-4 text-left text-xs font-black uppercase tracking-wide text-zinc-500">Comb</th>
+                                        <th class="px-5 py-4 text-left text-xs font-black uppercase tracking-wide text-zinc-500">
+                                            Install Status
+                                        </th>
                                         <th class="px-5 py-4 text-left text-xs font-black uppercase tracking-wide text-zinc-500">Created</th>
                                         <th class="px-5 py-4 text-right text-xs font-black uppercase tracking-wide text-zinc-500">Actions</th>
                                     </tr>
@@ -205,6 +227,22 @@ function formatDate(value?: string) {
                                             <div class="inline-flex items-center gap-2 rounded-full border border-zinc-800 bg-[#0d0f11] px-3 py-1 text-xs font-black text-zinc-300">
                                                 <HardDrive class="size-3" />
                                                 {{ cell.comb }}
+                                            </div>
+                                        </td>
+
+                                        <td class="px-5 py-4">
+                                            <span
+                                                class="inline-flex rounded-full border px-3 py-1 text-xs font-black"
+                                                :class="installStatusClass(cell.install_status)"
+                                            >
+                                                {{ cell.install_status_label || cell.install_status || 'Unknown' }}
+                                            </span>
+                                            <div
+                                                v-if="cell.install_status === 'failed' && cell.install_failure_reason"
+                                                class="mt-1 max-w-[260px] truncate text-xs text-status-danger"
+                                                :title="cell.install_failure_reason"
+                                            >
+                                                {{ cell.install_failure_reason }}
                                             </div>
                                         </td>
 

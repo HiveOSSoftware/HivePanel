@@ -406,6 +406,11 @@ class AdminCellController extends Controller
             'comb' => $cell->comb,
             'daemon_id' => $cell->daemon_id,
 
+            'install_status' => $cell->install_status->value,
+            'install_status_label' => $cell->install_status->label(),
+            'install_failure_reason' => $cell->install_failure_reason,
+            'installed_at' => $cell->installed_at?->toISOString(),
+
             'owner' => $cell->owner ? [
                 'id' => $cell->owner->id,
                 'name' => $cell->owner->name,
