@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import AppLayout from '@/layouts/AppLayout.vue'
-import { Head, Link } from '@inertiajs/vue3'
+import { Head } from '@inertiajs/vue3'
 import {
     Activity,
     BookOpen,
@@ -40,6 +40,7 @@ defineProps<{
 
 function formatDate(value?: string) {
     if (!value) return 'Unknown'
+
     return new Date(value).toLocaleString()
 }
 
@@ -52,9 +53,7 @@ function eventLabel(event: string) {
 </script>
 
 <template>
-    <AppLayout
-        :context="'admin'"
-    >
+    <AppLayout :context="'admin'">
         <Head title="Admin" />
 
         <div class="min-h-screen bg-surface-dark text-white">
@@ -63,10 +62,12 @@ function eventLabel(event: string) {
                     <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
                         <div class="flex items-center gap-3">
                             <Shield class="size-6 text-hive" />
+
                             <div>
                                 <h1 class="text-2xl font-black sm:text-3xl">
                                     Admin
                                 </h1>
+
                                 <p class="mt-2 text-sm text-zinc-400">
                                     Manage admin activity, nodes, users, cells, and system health.
                                 </p>
@@ -99,39 +100,66 @@ function eventLabel(event: string) {
                     <section class="grid gap-3 md:grid-cols-5">
                         <div class="rounded-panel border border-zinc-800 bg-surface p-5">
                             <Server class="size-5 text-hive" />
-                            <div class="mt-3 text-xs font-black uppercase tracking-wide text-zinc-500">Nodes</div>
-                            <div class="mt-1 text-2xl font-black">{{ stats.nodes }}</div>
-                            <div class="mt-1 text-xs text-zinc-500">{{ stats.active_nodes }} active</div>
+
+                            <div class="mt-3 text-xs font-black uppercase tracking-wide text-zinc-500">
+                                Nodes
+                            </div>
+
+                            <div class="mt-1 text-2xl font-black">
+                                {{ stats.nodes }}
+                            </div>
+
+                            <div class="mt-1 text-xs text-zinc-500">
+                                {{ stats.active_nodes }} active
+                            </div>
                         </div>
 
                         <div class="rounded-panel border border-zinc-800 bg-surface p-5">
                             <Database class="size-5 text-status-success" />
-                            <div class="mt-3 text-xs font-black uppercase tracking-wide text-zinc-500">Cells</div>
-                            <div class="mt-1 text-2xl font-black">{{ stats.cells }}</div>
+
+                            <div class="mt-3 text-xs font-black uppercase tracking-wide text-zinc-500">
+                                Cells
+                            </div>
+
+                            <div class="mt-1 text-2xl font-black">
+                                {{ stats.cells }}
+                            </div>
                         </div>
 
                         <div class="rounded-panel border border-zinc-800 bg-surface p-5">
                             <Users class="size-5 text-status-warning" />
-                            <div class="mt-3 text-xs font-black uppercase tracking-wide text-zinc-500">Users</div>
-                            <div class="mt-1 text-2xl font-black">{{ stats.users }}</div>
+
+                            <div class="mt-3 text-xs font-black uppercase tracking-wide text-zinc-500">
+                                Users
+                            </div>
+
+                            <div class="mt-1 text-2xl font-black">
+                                {{ stats.users }}
+                            </div>
                         </div>
 
                         <div class="rounded-panel border border-zinc-800 bg-surface p-5 md:col-span-2">
                             <Activity class="size-5 text-purple-300" />
-                            <div class="mt-3 text-xs font-black uppercase tracking-wide text-zinc-500">Audit Logs</div>
-                            <div class="mt-1 text-2xl font-black">{{ stats.audit_logs }}</div>
+
+                            <div class="mt-3 text-xs font-black uppercase tracking-wide text-zinc-500">
+                                Audit Logs
+                            </div>
+
+                            <div class="mt-1 text-2xl font-black">
+                                {{ stats.audit_logs }}
+                            </div>
                         </div>
                     </section>
 
-                    <section class="grid gap-3 md:grid-cols-2">
-                        <section class="grid gap-3 md:grid-cols-2">
+                    <section class="grid items-start gap-3 md:grid-cols-2">
+                        <section class="grid content-start items-start gap-3 md:grid-cols-2">
                             <a
                                 v-for="(link, index) in quickLinks"
                                 :key="link.label"
                                 :href="link.url"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                class="group rounded-panel border border-zinc-800 bg-surface p-5 transition hover:-translate-y-0.5 hover:border-hive/50 hover:bg-surface-light"
+                                :target="link.external ? '_blank' : undefined"
+                                :rel="link.external ? 'noopener noreferrer' : undefined"
+                                class="group self-start rounded-panel border border-zinc-800 bg-surface p-5 transition hover:-translate-y-0.5 hover:border-hive/50 hover:bg-surface-light"
                             >
                                 <div class="flex items-center justify-between gap-3">
                                     <div
@@ -143,7 +171,10 @@ function eventLabel(event: string) {
                                         <HeartHandshake v-else class="size-5" />
                                     </div>
 
-                                    <ExternalLink class="size-4 text-zinc-600 transition group-hover:text-hive" />
+                                    <ExternalLink
+                                        v-if="link.external"
+                                        class="size-4 text-zinc-600 transition group-hover:text-hive"
+                                    />
                                 </div>
 
                                 <div class="mt-4 text-sm font-black text-white">
@@ -156,9 +187,17 @@ function eventLabel(event: string) {
                             </a>
                         </section>
 
-                        <section class="grid gap-5">
+                        <section class="self-start">
                             <div class="rounded-panel border border-zinc-800 bg-surface p-5">
-                                <h2 class="text-lg font-black">Recent Activity</h2>
+                                <div class="flex items-center justify-between gap-3">
+                                    <h2 class="text-lg font-black">
+                                        Recent Activity
+                                    </h2>
+
+                                    <div class="text-xs font-bold text-zinc-500">
+                                        {{ recentLogs.length }} recent
+                                    </div>
+                                </div>
 
                                 <div class="mt-4 space-y-3">
                                     <div
