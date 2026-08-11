@@ -25,6 +25,10 @@ class Cell extends Model
         'install_status',
         'install_failure_reason',
         'installed_at',
+        'worker_sync_status',
+        'worker_sync_message',
+        'worker_sync_differences',
+        'worker_sync_checked_at',
     ];
 
     protected $appends = [
@@ -43,6 +47,8 @@ class Cell extends Model
             'metadata' => 'array',
             'install_status' => CellInstallStatus::class,
             'installed_at' => 'datetime',
+            'worker_sync_differences' => 'array',
+            'worker_sync_checked_at' => 'datetime',
         ];
     }
 

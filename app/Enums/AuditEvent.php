@@ -12,6 +12,8 @@ enum AuditEvent: string
     case SERVER_KILLED = 'server.killed';
     case SERVER_REINSTALLED = 'server.reinstalled';
     case SERVER_TRANSFERRED = 'server.transferred';
+    case SERVER_UPDATED = 'server.updated';
+    case SERVER_SYNC_REPAIRED = 'server.sync.repaired';
 
     case CONSOLE_COMMAND = 'console.command';
 

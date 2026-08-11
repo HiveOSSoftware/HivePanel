@@ -2,8 +2,10 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Enums\AuditEvent;
 use App\Http\Controllers\Controller;
 use App\Models\Cell;
+use App\Services\AuditLogger;
 use App\Services\Cells\CellSyncService;
 use Illuminate\Http\JsonResponse;
 use Throwable;
@@ -29,12 +31,36 @@ class AdminCellSyncController extends Controller
         }
     }
 
-    public function repair(string $id, CellSyncService $sync): JsonResponse
+    public function repair(string $id, CellSyncService $sync, AuditLogger $audit): JsonResponse
     {
         $cell = Cell::query()->with(['node', 'allocation'])->findOrFail($id);
 
         try {
+            $before = $sync->inspect($cell);
+
+            if ($before['synced']) {
+                return response()->json([
+                    ...$before,
+                    'message' => 'Cell definition is already in sync.',
+                ]);
+            }
+
             $result = $sync->repair($cell);
+
+            $audit->log(
+                AuditEvent::SERVER_SYNC_REPAIRED,
+                $cell,
+                "Worker definition for server \"{$cell->name}\" was repaired.",
+                [
+                    'node_id' => $cell->node_id,
+                    'daemon_id' => $cell->daemon_id,
+                    'repaired_fields' => collect($before['differences'] ?? [])
+                        ->pluck('field')
+                        ->values()
+                        ->all(),
+                    'differences' => $before['differences'] ?? [],
+                ]
+            );
 
             return response()->json([
                 ...$result,

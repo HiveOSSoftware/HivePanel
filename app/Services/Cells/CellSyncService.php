@@ -23,17 +23,17 @@ class CellSyncService
         $worker = $this->cells->cellForSync($cell);
 
         if (! $worker['reachable']) {
-            return [
+            return $this->storeInspection($cell, [
                 'status' => 'unreachable',
                 'synced' => false,
                 'repairable' => false,
                 'message' => 'The node Worker is currently unreachable.',
                 'differences' => [],
-            ];
+            ]);
         }
 
         if (! $worker['exists']) {
-            return [
+            return $this->storeInspection($cell, [
                 'status' => 'missing',
                 'synced' => false,
                 'repairable' => false,
@@ -45,34 +45,25 @@ class CellSyncService
                         'worker' => null,
                     ],
                 ],
-            ];
+            ]);
         }
 
         $expected = $this->expectedDefinition($cell);
         $actual = $this->workerDefinition($worker['cell'] ?? []);
 
-        $differences = $this->differences(
-            $expected,
-            $actual,
-        );
+        $differences = $this->differences($expected, $actual);
 
-        return [
-            'status' => count($differences) === 0
-                ? 'synced'
-                : 'out_of_sync',
-
+        return $this->storeInspection($cell, [
+            'status' => count($differences) === 0 ? 'synced' : 'out_of_sync',
             'synced' => count($differences) === 0,
             'repairable' => count($differences) > 0,
-
             'message' => count($differences) === 0
                 ? 'The Worker definition matches HivePanel.'
                 : 'The Worker definition differs from HivePanel.',
-
             'differences' => $differences,
-
             'expected' => $expected,
             'actual' => $actual,
-        ];
+        ]);
     }
 
     public function repair(Cell $cell): array
@@ -80,15 +71,11 @@ class CellSyncService
         $inspection = $this->inspect($cell);
 
         if ($inspection['status'] === 'unreachable') {
-            throw new RuntimeException(
-                'The node Worker is currently unreachable.',
-            );
+            throw new RuntimeException('The node Worker is currently unreachable.');
         }
 
         if ($inspection['status'] === 'missing') {
-            throw new RuntimeException(
-                'The Worker cell is missing and cannot currently be recreated automatically.',
-            );
+            throw new RuntimeException('The Worker cell is missing and cannot currently be recreated automatically.');
         }
 
         if ($inspection['synced']) {
@@ -97,34 +84,38 @@ class CellSyncService
 
         $this->cells->updateCellDefinition($cell);
 
-        $result = $this->inspect(
-            $cell->fresh([
-                'node',
-                'allocation',
-            ]),
-        );
+        $result = $this->inspect($cell->fresh([
+            'node',
+            'allocation',
+        ]));
 
         if (! $result['synced']) {
-            throw new RuntimeException(
-                'The Worker accepted the update but the cell definition is still out of sync.',
-            );
+            throw new RuntimeException('The Worker accepted the update but the cell definition is still out of sync.');
         }
 
         return $result;
     }
 
+    private function storeInspection(Cell $cell, array $inspection): array
+    {
+        $cell->forceFill([
+            'worker_sync_status' => $inspection['status'],
+            'worker_sync_message' => $inspection['message'] ?? null,
+            'worker_sync_differences' => $inspection['differences'] ?? [],
+            'worker_sync_checked_at' => now(),
+        ])->save();
+
+        return $inspection;
+    }
+
     private function validateCell(Cell $cell): void
     {
         if (! $cell->node) {
-            throw new RuntimeException(
-                'This cell is not assigned to a node.',
-            );
+            throw new RuntimeException('This cell is not assigned to a node.');
         }
 
         if (! $cell->daemon_id) {
-            throw new RuntimeException(
-                'This cell does not have a daemon ID.',
-            );
+            throw new RuntimeException('This cell does not have a daemon ID.');
         }
     }
 

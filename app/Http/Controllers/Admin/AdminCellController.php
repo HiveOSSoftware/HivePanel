@@ -354,8 +354,16 @@ class AdminCellController extends Controller
             'name' => ['required', 'string', 'max:255'],
         ]);
 
+        $nameChanged = $cell->name !== $data['name'];
+
         $cell->update([
             'name' => $data['name'],
+            ...($nameChanged ? [
+                'worker_sync_status' => null,
+                'worker_sync_message' => null,
+                'worker_sync_differences' => null,
+                'worker_sync_checked_at' => null,
+            ] : []),
         ]);
 
         $audit->log(
@@ -364,6 +372,7 @@ class AdminCellController extends Controller
             "Server \"{$cell->name}\" was updated.",
             [
                 'cell_id' => $cell->id,
+                'worker_sync_invalidated' => $nameChanged,
             ]
         );
 
@@ -411,6 +420,13 @@ class AdminCellController extends Controller
             'install_status_label' => $cell->install_status->label(),
             'install_failure_reason' => $cell->install_failure_reason,
             'installed_at' => $cell->installed_at?->toISOString(),
+
+            'worker_sync' => [
+                'status' => $cell->worker_sync_status,
+                'message' => $cell->worker_sync_message,
+                'differences' => $cell->worker_sync_differences ?? [],
+                'checked_at' => $cell->worker_sync_checked_at?->toISOString(),
+            ],
 
             'owner' => $cell->owner ? [
                 'id' => $cell->owner->id,

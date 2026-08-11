@@ -4,12 +4,17 @@ import AppLayout from '@/layouts/AppLayout.vue'
 import { Head, Link, router } from '@inertiajs/vue3'
 import {
     Boxes,
+    CircleAlert,
+    CircleCheck,
+    CircleDashed,
     Eye,
     HardDrive,
     Plus,
     Server,
+    TriangleAlert,
     Trash2,
     User,
+    WifiOff,
 } from 'lucide-vue-next'
 import { computed, ref } from 'vue'
 
@@ -24,6 +29,12 @@ const totalCells = computed(() => props.cells.length)
 
 const assignedCount = computed(() =>
     props.cells.filter((cell) => cell.allocation).length
+)
+
+const syncIssueCount = computed(() =>
+    props.cells.filter((cell) =>
+        ['out_of_sync', 'missing', 'unreachable', 'error'].includes(cell.worker_sync?.status)
+    ).length
 )
 
 function confirmDelete(cell: any) {
@@ -75,6 +86,114 @@ function installStatusClass(status?: string) {
     }
 }
 
+function syncStatusClass(status?: string | null) {
+    switch (status) {
+        case 'synced':
+            return 'border-status-success/30 bg-status-success/10 text-status-success'
+
+        case 'out_of_sync':
+            return 'border-status-warning/30 bg-status-warning/10 text-status-warning'
+
+        case 'missing':
+            return 'border-status-danger/30 bg-status-danger/10 text-status-danger'
+
+        case 'unreachable':
+            return 'border-status-danger/30 bg-status-danger/10 text-status-danger'
+        
+        case 'error':
+            return 'border-status-danger/30 bg-status-danger/10 text-status-danger'
+
+        default:
+            return 'border-zinc-700 bg-zinc-800 text-zinc-400'
+    }
+}
+
+function syncStatusLabel(status?: string | null) {
+    switch (status) {
+        case 'synced':
+            return 'Synced'
+
+        case 'out_of_sync':
+            return 'Out of Sync'
+
+        case 'missing':
+            return 'Missing'
+
+        case 'unreachable':
+            return 'Unavailable'
+
+        case 'error':
+            return 'Check Failed'
+
+        default:
+            return 'Not Checked'
+    }
+}
+
+function syncStatusIcon(status?: string | null) {
+    switch (status) {
+        case 'synced':
+            return CircleCheck
+
+        case 'out_of_sync':
+            return TriangleAlert
+
+        case 'missing':
+            return CircleAlert
+
+        case 'unreachable':
+            return WifiOff
+        
+        case 'error':
+            return CircleAlert
+
+        default:
+            return CircleDashed
+    }
+}
+
+function syncStatusDescription(cell: any) {
+    const status = cell.worker_sync?.status
+
+    if (!status) {
+        return 'Worker sync has not been checked yet.'
+    }
+
+    if (status === 'synced') {
+        return cell.worker_sync?.checked_at
+            ? `Checked ${formatDate(cell.worker_sync.checked_at)}`
+            : 'Worker definition matches HivePanel.'
+    }
+
+    if (status === 'out_of_sync') {
+        const count = cell.worker_sync?.differences?.length ?? 0
+
+        if (count === 1) {
+            return '1 definition difference'
+        }
+
+        if (count > 1) {
+            return `${count} definition differences`
+        }
+
+        return 'Worker definition differs from HivePanel.'
+    }
+
+    if (status === 'missing') {
+        return 'Cell is missing from the Worker.'
+    }
+
+    if (status === 'unreachable') {
+        return 'Worker could not be contacted.'
+    }
+
+    if (status === 'error') {
+        return cell.worker_sync?.message || 'Worker reconciliation failed.'
+    }
+
+    return cell.worker_sync?.message || 'Unknown Worker sync state.'
+}
+
 function formatDate(value?: string) {
     if (!value) return 'Never'
     return new Date(value).toLocaleString()
@@ -114,23 +233,72 @@ function formatDate(value?: string) {
                         </div>
                     </section>
 
-                    <section class="grid gap-3 md:grid-cols-3">
+                    <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                         <div class="rounded-panel border border-zinc-800 bg-surface p-5">
-                            <div class="text-xs font-black uppercase tracking-wide text-zinc-500">Total Cells</div>
-                            <div class="mt-1 text-2xl font-black">{{ totalCells }}</div>
-                            <div class="mt-1 text-xs text-zinc-500">created cells</div>
+                            <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                Total Cells
+                            </div>
+                            <div class="mt-1 text-2xl font-black">
+                                {{ totalCells }}
+                            </div>
+                            <div class="mt-1 text-xs text-zinc-500">
+                                created cells
+                            </div>
                         </div>
 
                         <div class="rounded-panel border border-zinc-800 bg-surface p-5">
-                            <div class="text-xs font-black uppercase tracking-wide text-zinc-500">Assigned Allocations</div>
-                            <div class="mt-1 text-2xl font-black text-hive">{{ assignedCount }}</div>
-                            <div class="mt-1 text-xs text-zinc-500">cells with ports</div>
+                            <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                Assigned Allocations
+                            </div>
+                            <div class="mt-1 text-2xl font-black text-hive">
+                                {{ assignedCount }}
+                            </div>
+                            <div class="mt-1 text-xs text-zinc-500">
+                                cells with ports
+                            </div>
                         </div>
 
                         <div class="rounded-panel border border-zinc-800 bg-surface p-5">
-                            <div class="text-xs font-black uppercase tracking-wide text-zinc-500">Unassigned</div>
-                            <div class="mt-1 text-2xl font-black text-status-warning">{{ totalCells - assignedCount }}</div>
-                            <div class="mt-1 text-xs text-zinc-500">missing allocation</div>
+                            <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                Unassigned
+                            </div>
+                            <div class="mt-1 text-2xl font-black text-status-warning">
+                                {{ totalCells - assignedCount }}
+                            </div>
+                            <div class="mt-1 text-xs text-zinc-500">
+                                missing allocation
+                            </div>
+                        </div>
+
+                        <div
+                            class="rounded-panel border bg-surface p-5"
+                            :class="syncIssueCount > 0 ? 'border-status-danger/30' : 'border-zinc-800'"
+                        >
+                            <div class="flex items-center justify-between">
+                                <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                    Sync Issues
+                                </div>
+
+                                <TriangleAlert
+                                    v-if="syncIssueCount > 0"
+                                    class="size-4 text-status-danger"
+                                />
+                                <CircleCheck
+                                    v-else
+                                    class="size-4 text-status-success"
+                                />
+                            </div>
+
+                            <div
+                                class="mt-1 text-2xl font-black"
+                                :class="syncIssueCount > 0 ? 'text-status-danger' : 'text-status-success'"
+                            >
+                                {{ syncIssueCount }}
+                            </div>
+
+                            <div class="mt-1 text-xs text-zinc-500">
+                                cells requiring attention
+                            </div>
                         </div>
                     </section>
 
@@ -170,6 +338,9 @@ function formatDate(value?: string) {
                                         <th class="px-5 py-4 text-left text-xs font-black uppercase tracking-wide text-zinc-500">Comb</th>
                                         <th class="px-5 py-4 text-left text-xs font-black uppercase tracking-wide text-zinc-500">
                                             Install Status
+                                        </th>
+                                        <th class="px-5 py-4 text-left text-xs font-black uppercase tracking-wide text-zinc-500">
+                                            Worker Sync
                                         </th>
                                         <th class="px-5 py-4 text-left text-xs font-black uppercase tracking-wide text-zinc-500">Created</th>
                                         <th class="px-5 py-4 text-right text-xs font-black uppercase tracking-wide text-zinc-500">Actions</th>
@@ -237,12 +408,35 @@ function formatDate(value?: string) {
                                             >
                                                 {{ cell.install_status_label || cell.install_status || 'Unknown' }}
                                             </span>
+
                                             <div
                                                 v-if="cell.install_status === 'failed' && cell.install_failure_reason"
                                                 class="mt-1 max-w-[260px] truncate text-xs text-status-danger"
                                                 :title="cell.install_failure_reason"
                                             >
                                                 {{ cell.install_failure_reason }}
+                                            </div>
+                                        </td>
+
+                                        <td class="px-5 py-4">
+                                            <div>
+                                                <span
+                                                    class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-black"
+                                                    :class="syncStatusClass(cell.worker_sync?.status)"
+                                                >
+                                                    <component
+                                                        :is="syncStatusIcon(cell.worker_sync?.status)"
+                                                        class="size-3.5"
+                                                    />
+                                                    {{ syncStatusLabel(cell.worker_sync?.status) }}
+                                                </span>
+
+                                                <div
+                                                    class="mt-1.5 max-w-[240px] truncate text-xs text-zinc-500"
+                                                    :title="cell.worker_sync?.message || syncStatusDescription(cell)"
+                                                >
+                                                    {{ syncStatusDescription(cell) }}
+                                                </div>
                                             </div>
                                         </td>
 
