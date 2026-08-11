@@ -4,6 +4,7 @@ import { Head, router } from '@inertiajs/vue3'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
     ArrowLeft,
+    ArchiveRestore,
     Download,
     File,
     Folder,
@@ -48,18 +49,30 @@ type BackupDetails = {
     name: string
 }
 
+type MountedBackupDetails = {
+    id: string
+    backup_id: string
+    name: string
+    status: string
+    read_only: boolean
+    mounted_at?: string | null
+    expires_at?: string | null
+}
+
 const props = withDefaults(defineProps<{
     cell: any
     sftp?: SftpDetails | null
     mode?: FileManagerMode
     mount?: BackupMountDetails | null
     backup?: BackupDetails | null
+    mountedBackup?: MountedBackupDetails | null
     initialPath?: string
 }>(), {
     sftp: null,
     mode: 'live',
     mount: null,
     backup: null,
+    mountedBackup: null,
     initialPath: '',
 })
 
@@ -93,6 +106,13 @@ type FileEntry = {
     directory?: boolean
     size?: number
     modified_at?: string
+    virtual?: boolean
+    virtual_type?: string
+    mount_id?: string
+    backup_id?: string
+    backup_name?: string
+    expires_at?: string
+    read_only?: boolean
 }
 
 type ConfirmAction = 'delete' | 'restore' | 'permanent-delete'
@@ -197,11 +217,49 @@ const isRecycleBin = computed(() => {
 const breadcrumbs = computed(() => {
     if (!currentPath.value) return []
 
+    const parts = currentPath.value.split('/').filter(Boolean)
+
+    if (
+        parts[0] === '__backup_mount__' &&
+        parts[1]
+    ) {
+        const mountID = parts[1]
+
+        const backupName =
+            props.mountedBackup?.id === mountID
+                ? props.mountedBackup.name
+                : props.backup?.name ?? 'Mounted Backup'
+
+        const crumbs = [
+            {
+                name: backupName,
+                path: `__backup_mount__/${mountID}`,
+            },
+        ]
+
+        let running = `__backup_mount__/${mountID}`
+
+        for (const part of parts.slice(2)) {
+            running = `${running}/${part}`
+
+            crumbs.push({
+                name: part,
+                path: running,
+            })
+        }
+
+        return crumbs
+    }
+
     let running = ''
 
-    return currentPath.value.split('/').filter(Boolean).map((part) => {
+    return parts.map((part) => {
         running = running ? `${running}/${part}` : part
-        return { name: part, path: running }
+
+        return {
+            name: part,
+            path: running,
+        }
     })
 })
 
@@ -469,11 +527,41 @@ function isRecycleBinEntry(entry: FileEntry) {
     return entry.path === '.recycle_bin' || entry.name === '.recycle_bin'
 }
 
+function isMountedBackupEntry(entry: FileEntry) {
+    return (
+        entry.virtual === true &&
+        entry.virtual_type === 'backup_mount' &&
+        !!entry.mount_id
+    )
+}
+
+function isMountedBackupItem(entry: FileEntry) {
+    return (
+        entry.virtual === true &&
+        (
+            entry.virtual_type === 'backup_mount' ||
+            entry.virtual_type === 'backup_mount_item'
+        )
+    )
+}
+
 function displayName(entry: FileEntry) {
-    return isRecycleBinEntry(entry) ? 'Recycle Bin' : entry.name
+    if (isRecycleBinEntry(entry)) {
+        return 'Recycle Bin'
+    }
+
+    if (isMountedBackupEntry(entry)) {
+        return entry.backup_name ?? entry.name ?? 'Mounted Backup'
+    }
+
+    return entry.name
 }
 
 function canDeleteEntry(entry: FileEntry) {
+    if (isMountedBackupItem(entry)) {
+        return false
+    }
+
     return !isRecycleBinEntry(entry)
 }
 
@@ -594,12 +682,17 @@ async function loadFiles(
 }
 
 function openEntry(entry: FileEntry) {
+    if (isMountedBackupEntry(entry)) {
+        loadFiles(entry.path)
+        return
+    }
+
     if (isFolder(entry)) {
         loadFiles(entry.path)
         return
     }
 
-    if (isBackupMode.value) {
+    if (isBackupMode.value || isMountedBackupItem(entry)) {
         return
     }
 
@@ -614,13 +707,22 @@ function goUp() {
     if (!currentPath.value) return
 
     const parts = currentPath.value.split('/').filter(Boolean)
+
+    if (
+        parts[0] === '__backup_mount__' &&
+        parts.length <= 2
+    ) {
+        loadFiles('')
+        return
+    }
+
     parts.pop()
 
     loadFiles(parts.join('/'))
 }
 
 function downloadFile(entry: FileEntry) {
-    if (isBackupMode.value) return
+    if (isBackupMode.value || isMountedBackupItem(entry)) return
 
     window.location.href = fileDownloadUrl(entry)
 }
@@ -865,11 +967,44 @@ async function deleteFile(entry: FileEntry) {
     }
 }
 
+function mountedBackupRestoreTarget(entry: FileEntry) {
+    if (!isMountedBackupItem(entry) || !entry.mount_id) {
+        return null
+    }
+
+    const prefix = `__backup_mount__/${entry.mount_id}`
+    let relativePath = entry.path
+
+    if (relativePath === prefix) {
+        relativePath = ''
+    } else if (relativePath.startsWith(`${prefix}/`)) {
+        relativePath = relativePath.slice(prefix.length + 1)
+    }
+
+    return {
+        mountID: entry.mount_id,
+        path: relativePath,
+    }
+}
+
 async function restoreFile(entry: FileEntry) {
     if (!cellId.value) return
 
-    if (isBackupMode.value && !props.mount?.id) {
+    const virtualRestore = mountedBackupRestoreTarget(entry)
+
+    if (
+        isBackupMode.value &&
+        !props.mount?.id
+    ) {
         showError('This backup mount is unavailable.')
+        return
+    }
+
+    if (
+        virtualRestore &&
+        !virtualRestore.path
+    ) {
+        showError('Select a file or folder inside the mounted backup.')
         return
     }
 
@@ -877,9 +1012,18 @@ async function restoreFile(entry: FileEntry) {
     error.value = ''
 
     try {
-        const endpoint = isBackupMode.value
-            ? `${mountedBackupBaseUrl()}/restore`
-            : `/cells/${cellId.value}/files/restore`
+        let endpoint = `/cells/${cellId.value}/files/restore`
+        let restorePath = entry.path
+        let restoringFromBackup = false
+
+        if (isBackupMode.value) {
+            endpoint = `${mountedBackupBaseUrl()}/restore`
+            restoringFromBackup = true
+        } else if (virtualRestore) {
+            endpoint = `/cells/${cellId.value}/backup-mounts/${encodeURIComponent(virtualRestore.mountID)}/restore`
+            restorePath = virtualRestore.path
+            restoringFromBackup = true
+        }
 
         const response = await fetch(endpoint, {
             method: 'POST',
@@ -890,13 +1034,15 @@ async function restoreFile(entry: FileEntry) {
                 'X-Requested-With': 'XMLHttpRequest',
                 'X-CSRF-TOKEN': csrfToken(),
             },
-            body: JSON.stringify({ path: entry.path }),
+            body: JSON.stringify({
+                path: restorePath,
+            }),
         })
 
         if (!response.ok) {
             showError(await responseError(
                 response,
-                isBackupMode.value
+                restoringFromBackup
                     ? 'Failed to restore item from backup.'
                     : 'Failed to restore item.',
             ))
@@ -908,8 +1054,9 @@ async function restoreFile(entry: FileEntry) {
         }
 
         closeConfirm(true)
+
         showToast(
-            isBackupMode.value
+            restoringFromBackup
                 ? 'Item restored from backup.'
                 : 'Item restored.',
         )
@@ -1174,6 +1321,10 @@ onUnmounted(() => {
                                     v-if="isRecycleBinEntry(entry)"
                                     class="size-5 shrink-0 text-status-danger"
                                 />
+                                <ArchiveRestore
+                                    v-else-if="isMountedBackupEntry(entry)"
+                                    class="size-5 shrink-0 text-hive"
+                                />
                                 <Folder
                                     v-else-if="isFolder(entry)"
                                     class="size-5 shrink-0 text-hive"
@@ -1183,22 +1334,47 @@ onUnmounted(() => {
                                     class="size-5 shrink-0 text-zinc-400"
                                 />
 
-                                <button class="truncate text-left font-bold text-zinc-200 hover:text-hive" @click="openEntry(entry)">
-                                    {{ displayName(entry) }}
-                                </button>
+                                <div class="min-w-0">
+                                    <button class="block max-w-full truncate text-left font-bold text-zinc-200 hover:text-hive" @click="openEntry(entry)">
+                                        {{ displayName(entry) }}
+                                    </button>
+
+                                    <div
+                                        v-if="isMountedBackupEntry(entry)"
+                                        class="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] font-bold text-zinc-500"
+                                    >
+                                        <span>Mounted backup</span>
+                                        <span class="rounded-full border border-zinc-700 bg-surface-light px-2 py-0.5 text-[10px] uppercase tracking-wide text-zinc-400">
+                                            Read only
+                                        </span>
+                                    </div>
+                                </div>
                             </div>
 
                             <div class="hidden text-zinc-500 sm:block">
-                                {{ isFolder(entry) ? '—' : formatBytes(entry.size) }}
+                                {{ isMountedBackupEntry(entry) || isFolder(entry) ? '—' : formatBytes(entry.size) }}
                             </div>
 
                             <div class="hidden text-zinc-500 sm:block">
-                                {{ entry.modified_at ?? '—' }}
+                                {{
+                                    isMountedBackupEntry(entry) && entry.expires_at
+                                        ? `Expires ${new Date(entry.expires_at).toLocaleString()}`
+                                        : entry.modified_at ?? '—'
+                                }}
                             </div>
 
                             <div class="flex justify-end gap-2">
                                 <button
-                                    v-if="!isBackupMode && !isFolder(entry)"
+                                    v-if="isMountedBackupEntry(entry)"
+                                    class="text-zinc-500 transition hover:text-hive"
+                                    title="Browse mounted backup"
+                                    @click.stop="openEntry(entry)"
+                                >
+                                    <ArchiveRestore class="size-4" />
+                                </button>
+
+                                <button
+                                    v-if="!isBackupMode && !isMountedBackupItem(entry) && !isFolder(entry)"
                                     class="text-zinc-500 transition hover:text-hive"
                                     title="Download"
                                     @click.stop="downloadFile(entry)"
@@ -1206,7 +1382,7 @@ onUnmounted(() => {
                                     <Download class="size-4" />
                                 </button>
 
-                                <template v-if="isBackupMode">
+                                <template v-if="isBackupMode || entry.virtual_type === 'backup_mount_item'">
                                     <button
                                         class="text-zinc-500 transition hover:text-status-success disabled:opacity-50"
                                         :disabled="actionLoading === entry.path"
@@ -1217,7 +1393,7 @@ onUnmounted(() => {
                                     </button>
                                 </template>
 
-                                <template v-else-if="isRecycleBin">
+                                <template v-else-if="isRecycleBin && !isMountedBackupItem(entry)">
                                     <button class="text-zinc-500 transition hover:text-status-success disabled:opacity-50" :disabled="actionLoading === entry.path" title="Restore" @click.stop="openConfirm('restore', entry)">
                                         <RotateCcw class="size-4" />
                                     </button>
@@ -1239,8 +1415,21 @@ onUnmounted(() => {
                             </div>
 
                             <div class="col-span-2 flex flex-wrap gap-3 text-xs text-zinc-500 sm:hidden">
-                                <span>{{ isFolder(entry) ? 'Folder' : formatBytes(entry.size) }}</span>
-                                <span v-if="entry.modified_at">{{ entry.modified_at }}</span>
+                                <span>
+                                    {{
+                                        isMountedBackupEntry(entry)
+                                            ? 'Mounted Backup'
+                                            : isFolder(entry)
+                                                ? 'Folder'
+                                                : formatBytes(entry.size)
+                                    }}
+                                </span>
+                                <span v-if="isMountedBackupEntry(entry) && entry.expires_at">
+                                    Expires {{ new Date(entry.expires_at).toLocaleString() }}
+                                </span>
+                                <span v-else-if="entry.modified_at">
+                                    {{ entry.modified_at }}
+                                </span>
                             </div>
                         </div>
                         <div

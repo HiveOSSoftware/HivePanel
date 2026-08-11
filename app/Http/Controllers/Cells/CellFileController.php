@@ -3,10 +3,12 @@
 namespace App\Http\Controllers\Cells;
 
 use App\Enums\AuditEvent;
+use App\Enums\BackupMountStatus;
 use App\Models\Cell;
 use App\Models\SftpCredential;
 use App\Models\User;
 use App\Services\AuditLogger;
+use App\Services\Node\BackupNodeClient;
 use App\Services\Node\CellNodeClient;
 use App\Services\Node\FileNodeClient;
 use App\Services\Sftp\SftpAccessService;
@@ -43,6 +45,8 @@ class CellFileController extends CellBaseController
             ->where('user_id', $user->id)
             ->first();
 
+        $mountedBackup = $this->mountedBackup($cell);
+
         return Inertia::render('Cells/Files', [
             'cell' => $workerCell,
             'mode' => 'live',
@@ -50,6 +54,10 @@ class CellFileController extends CellBaseController
 
             'mount' => null,
             'backup' => null,
+
+            'mountedBackup' => $mountedBackup
+                ? $this->mountedBackupData($mountedBackup)
+                : null,
 
             'sftp' => [
                 'enabled' => (bool) (
@@ -85,24 +93,89 @@ class CellFileController extends CellBaseController
         Request $request,
         CellNodeClient $cells,
         FileNodeClient $files,
+        BackupNodeClient $backups,
     ) {
         $cell = $this->panelCellOrFail($id);
         $this->abortUnlessInstalled($cell);
 
         $this->abortIfLocked($cell, $cells);
 
-        $page = max(1, $request->integer('page', 1), );
+        $page = max(
+            1,
+            $request->integer('page', 1),
+        );
 
-        $perPage = min(500, max(1, $request->integer('per_page', 250), ), );
-
-        return response()->json(
-            $files->files(
-                $cell,
-                $request->query('path', ''),
-                $page,
-                $perPage,
+        $perPage = min(
+            500,
+            max(
+                1,
+                $request->integer('per_page', 250),
             ),
         );
+
+        $path = trim(
+            (string) $request->query('path', ''),
+            '/',
+        );
+
+        if ($this->isMountedBackupPath($path)) {
+            return response()->json(
+                $this->mountedBackupFiles(
+                    $cell,
+                    $path,
+                    $page,
+                    $perPage,
+                    $backups,
+                ),
+            );
+        }
+
+        $result = $files->files(
+            $cell,
+            $path,
+            $page,
+            $perPage,
+        );
+
+        if ($path === '') {
+            $mountedBackup = $this->mountedBackup($cell);
+
+            if ($mountedBackup) {
+                $virtualDirectory = $this->mountedBackupDirectory(
+                    $mountedBackup,
+                );
+
+                if (
+                    isset($result['files']) &&
+                    is_array($result['files'])
+                ) {
+                    array_unshift(
+                        $result['files'],
+                        $virtualDirectory,
+                    );
+
+                    if (
+                        isset($result['pagination']) &&
+                        is_array($result['pagination'])
+                    ) {
+                        if (isset($result['pagination']['total'])) {
+                            $result['pagination']['total']++;
+                        }
+
+                        if (isset($result['pagination']['to'])) {
+                            $result['pagination']['to']++;
+                        }
+                    }
+                } elseif (array_is_list($result)) {
+                    array_unshift(
+                        $result,
+                        $virtualDirectory,
+                    );
+                }
+            }
+        }
+
+        return response()->json($result);
     }
 
     public function download(
@@ -495,6 +568,228 @@ class CellFileController extends CellBaseController
         );
 
         return response()->json($result);
+    }
+
+    private function isMountedBackupPath(string $path): bool
+    {
+        return $path === '__backup_mount__'
+            || str_starts_with(
+                $path,
+                '__backup_mount__/',
+            );
+    }
+
+    private function mountedBackupFiles(
+        Cell $cell,
+        string $path,
+        int $page,
+        int $perPage,
+        BackupNodeClient $backups,
+    ): array {
+        $segments = explode(
+            '/',
+            $path,
+        );
+
+        $mountID = $segments[1] ?? '';
+
+        if ($mountID === '') {
+            return [
+                'path' => '',
+                'files' => [],
+                'pagination' => [
+                    'page' => 1,
+                    'per_page' => $perPage,
+                    'total' => 0,
+                    'total_pages' => 1,
+                    'from' => 0,
+                    'to' => 0,
+                ],
+            ];
+        }
+
+        $mount = $cell->backupMounts()
+            ->with('backup')
+            ->whereKey($mountID)
+            ->where(
+                'status',
+                BackupMountStatus::MOUNTED,
+            )
+            ->firstOrFail();
+
+        abort_if(
+            $mount->hasExpired(),
+            409,
+            'This backup mount has expired.',
+        );
+
+        $relativePath = implode(
+            '/',
+            array_slice(
+                $segments,
+                2,
+            ),
+        );
+
+        $result = $backups->mountedBackupFiles(
+            cell: $cell,
+            mount: $mount,
+            path: $relativePath,
+            page: $page,
+            perPage: $perPage,
+        );
+
+        return $this->prefixMountedBackupPaths(
+            $result,
+            $mount->id,
+        );
+    }
+
+    private function prefixMountedBackupPaths(
+        array $result,
+        string $mountID,
+    ): array {
+        $prefix = '__backup_mount__/' . $mountID;
+
+        if (
+            isset($result['files']) &&
+            is_array($result['files'])
+        ) {
+            $result['files'] = array_map(
+                fn (array $entry): array => $this->prefixMountedBackupEntry(
+                    $entry,
+                    $prefix,
+                    $mountID,
+                ),
+                $result['files'],
+            );
+
+            if (isset($result['path'])) {
+                $relativePath = trim(
+                    (string) $result['path'],
+                    '/',
+                );
+
+                $result['path'] = $relativePath === ''
+                    ? $prefix
+                    : $prefix . '/' . $relativePath;
+            }
+
+            return $result;
+        }
+
+        if (array_is_list($result)) {
+            return array_map(
+                fn (array $entry): array => $this->prefixMountedBackupEntry(
+                    $entry,
+                    $prefix,
+                    $mountID,
+                ),
+                $result,
+            );
+        }
+
+        return $result;
+    }
+
+    private function prefixMountedBackupEntry(
+        array $entry,
+        string $prefix,
+        string $mountID,
+    ): array {
+        $entryPath = trim(
+            (string) ($entry['path'] ?? $entry['name'] ?? ''),
+            '/',
+        );
+
+        $entry['path'] = $entryPath === ''
+            ? $prefix
+            : $prefix . '/' . $entryPath;
+
+        $entry['virtual'] = true;
+        $entry['virtual_type'] = 'backup_mount_item';
+        $entry['mount_id'] = $mountID;
+        $entry['read_only'] = true;
+
+        return $entry;
+    }
+
+    private function mountedBackup(Cell $cell)
+    {
+        return $cell->backupMounts()
+            ->with([
+                'backup:id,name',
+            ])
+            ->where(
+                'status',
+                BackupMountStatus::MOUNTED,
+            )
+            ->where(function ($query) {
+                $query
+                    ->whereNull('expires_at')
+                    ->orWhere(
+                        'expires_at',
+                        '>',
+                        now(),
+                    );
+            })
+            ->latest('mounted_at')
+            ->first();
+    }
+
+    private function mountedBackupData($mount): array
+    {
+        return [
+            'id' => $mount->id,
+            'backup_id' => $mount->backup_id,
+
+            'name' => $mount->backup?->name
+                ?: 'Mounted Backup',
+
+            'status' => $mount->status->value,
+            'read_only' => true,
+
+            'mounted_at' => $mount
+                ->mounted_at
+                ?->toIso8601String(),
+
+            'expires_at' => $mount
+                ->expires_at
+                ?->toIso8601String(),
+        ];
+    }
+
+    private function mountedBackupDirectory($mount): array
+    {
+        return [
+            'name' => $mount->backup?->name
+                ?: 'Mounted Backup',
+
+            'path' => '__backup_mount__/' . $mount->id,
+
+            'type' => 'directory',
+            'is_directory' => true,
+            'size' => 0,
+
+            'modified_at' => $mount
+                ->mounted_at
+                ?->toIso8601String(),
+
+            'virtual' => true,
+            'virtual_type' => 'backup_mount',
+
+            'mount_id' => $mount->id,
+            'backup_id' => $mount->backup_id,
+
+            'backup_name' => $mount->backup?->name
+                ?: 'Mounted Backup',
+
+            'expires_at' => $mount
+                ->expires_at
+                ?->toIso8601String(),
+
+            'read_only' => true,
+        ];
     }
 
     private function sftpUsername(Cell $cell, User $user): string
