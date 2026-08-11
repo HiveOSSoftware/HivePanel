@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import AppLayout from '@/layouts/AppLayout.vue'
-import { Head } from '@inertiajs/vue3'
+import { Head, Link } from '@inertiajs/vue3'
 import { computed, ref } from 'vue'
 import { Bug, Clock, HardDrive, RefreshCw, Save, Server, Trash, Wrench } from 'lucide-vue-next'
 
@@ -227,6 +227,24 @@ async function runUtility(utility: string) {
                                     </div>
                                 </div>
                             </div>
+                        </section>
+
+                        <section class="rounded-panel border border-status-danger/30 bg-surface p-5 sm:p-6">
+                            <h2 class="text-lg font-black">
+                                Reinstall Server
+                            </h2>
+
+                            <p class="mt-2 text-sm leading-6 text-zinc-400">
+                                Permanently delete all server files and install a fresh copy using the current or another comb.
+                            </p>
+
+                            <Link
+                                :href="`/cells/${cell.id}/reinstall`"
+                                class="mt-5 inline-flex items-center gap-2 rounded-button border border-status-danger/40 bg-status-danger/10 px-4 py-2.5 text-sm font-black text-status-danger transition hover:border-status-danger hover:bg-status-danger/20"
+                            >
+                                <RefreshCw class="size-4" />
+                                Reinstall Server
+                            </Link>
                         </section>
                     </div>
                 </div>

@@ -146,4 +146,49 @@ class CellNodeClient
             ->throw()
             ->json();
     }
+
+    public function prepareReinstall(
+        Cell $cell,
+    ): array {
+        return $this->nodeClient
+            ->client($cell->node)
+            ->post(
+                "/cells/"
+                .rawurlencode($cell->daemon_id)
+                .'/reinstall',
+            )
+            ->throw()
+            ->json();
+    }
+
+    public function updateCellDefinition(
+        Cell $cell,
+    ): array {
+        $metadata = $cell->metadata ?? [];
+
+        return $this->nodeClient
+            ->client($cell->node)
+            ->patch(
+                '/cells/'
+                .rawurlencode($cell->daemon_id)
+                .'/definition',
+                [
+                    'comb' => $cell->comb,
+
+                    'comb_data' => data_get(
+                        $metadata,
+                        'comb_data',
+                        [],
+                    ),
+
+                    'variables' => data_get(
+                        $metadata,
+                        'variables',
+                        [],
+                    ),
+                ],
+            )
+            ->throw()
+            ->json();
+    }
 }

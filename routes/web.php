@@ -34,6 +34,7 @@ use App\Http\Controllers\Cells\CellFileController;
 use App\Http\Controllers\Cells\CellImporterController;
 use App\Http\Controllers\Cells\CellPlayerController;
 use App\Http\Controllers\Cells\CellPowerController;
+use App\Http\Controllers\Cells\CellReinstallController;
 use App\Http\Controllers\Cells\CellScheduleController;
 use App\Http\Controllers\Cells\CellSettingsController;
 use App\Http\Controllers\Cells\CellSftpCredentialController;
@@ -68,7 +69,6 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::post('{node}/registration-token', [AdminNodeController::class, 'generateRegistrationToken'])->name('registration-token');
 
             // Allocations
-
             Route::get('{node}/allocations', [AdminNodeAllocationController::class, 'index'])->name('allocations');
             Route::post('{node}/allocations', [AdminNodeAllocationController::class, 'store'])->name('allocations.store');
             Route::delete('{node}/allocations/{allocation}', [AdminNodeAllocationController::class, 'destroy'])->name('allocations.destroy');
@@ -206,6 +206,13 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('/{id}/utilities/{utility}', [CellSettingsController::class, 'utility'])->name('utilities.run')
             ->middleware('cell.permission:' . CellPermissions::SETTINGS_UPDATE);
 
+        Route::get('/{id}/reinstall', [CellReinstallController::class, 'show'])->name('reinstall.show')
+            ->middleware('cell.permission:' . CellPermissions::SETTINGS_UPDATE);
+        Route::post('/{id}/reinstall', [CellReinstallController::class, 'store'])->name('reinstall.store')
+            ->middleware('cell.permission:' . CellPermissions::SETTINGS_UPDATE);
+        Route::post('/{id}/installation/retry', [CellReinstallController::class, 'retry'])->name('installation.retry')
+            ->middleware('cell.permission:' . CellPermissions::SETTINGS_UPDATE);
+
         Route::get('/{id}/config', [CellConfigController::class, 'index'])->name('config.index')
             ->middleware('cell.permission:' . CellPermissions::SETTINGS_VIEW);
         Route::get('/{id}/config-json', [CellConfigController::class, 'json'])->name('config.json')
@@ -234,13 +241,12 @@ Route::middleware(['auth', 'verified'])->group(function () {
             ->middleware('cell.permission:' . CellPermissions::BACKUPS_VIEW);
         Route::delete('/{id}/backup-mounts/{mount}', [CellBackupMountController::class, 'unmount'])->name('backup-mounts.unmount')
             ->middleware('cell.permission:' . CellPermissions::BACKUPS_VIEW);
-        Route::get('/{id}/backup-mounts/{mount}/files',[CellBackupMountController::class, 'index'],)->name('cells.backup-mounts.files')
+        Route::get('/{id}/backup-mounts/{mount}/files', [CellBackupMountController::class, 'index'])->name('backup-mounts.files')
             ->middleware('cell.permission:' . CellPermissions::BACKUPS_VIEW);
-        Route::get('/{id}/backup-mounts/{mount}/files-json', [CellBackupMountController::class, 'files'])->name('cells.backup-mounts.files-json')
+        Route::get('/{id}/backup-mounts/{mount}/files-json', [CellBackupMountController::class, 'files'])->name('backup-mounts.files-json')
             ->middleware('cell.permission:' . CellPermissions::BACKUPS_VIEW);
-        Route::post('/{id}/backup-mounts/{mount}/restore', [CellBackupMountController::class, 'restorePath'])->name('cells.backup-mounts.restore')
-            ->middleware('cell.permission:' . CellPermissions::BACKUPS_VIEW);
-
+        Route::post('/{id}/backup-mounts/{mount}/restore', [CellBackupMountController::class, 'restorePath'])->name('backup-mounts.restore')
+            ->middleware('cell.permission:' . CellPermissions::BACKUPS_RESTORE);
 
         Route::get('/{id}/importer', [CellImporterController::class, 'index'])->name('importer.index')
             ->middleware('cell.permission:' . CellPermissions::FILES_UPLOAD);
