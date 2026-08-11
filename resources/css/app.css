@@ -89,3 +89,36 @@ html {
         @apply bg-background text-foreground;
     }
 }
+
+/* HivePanel scrollbars */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: #3f3f46 #0d0f11;
+}
+
+*::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+    background: #0d0f11;
+}
+
+*::-webkit-scrollbar-thumb {
+    background: #3f3f46;
+    border: 2px solid #0d0f11;
+    border-radius: 9999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+    background: #52525b;
+}
+
+*::-webkit-scrollbar-thumb:active {
+    background: #71717a;
+}
+
+*::-webkit-scrollbar-corner {
+    background: #0d0f11;
+}
