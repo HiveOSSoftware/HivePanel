@@ -11,6 +11,7 @@ import {
     LinkIcon,
     RefreshCw,
     RotateCcw,
+    LogOut,
     Server,
     Trash,
     Upload,
@@ -103,6 +104,7 @@ const entries = ref<FileEntry[]>([])
 const loading = ref(false)
 const error = ref('')
 const actionLoading = ref('')
+const unmountingBackup = ref(false)
 const currentPage = ref(1)
 
 const perPage = ref(250)
@@ -201,6 +203,18 @@ const breadcrumbs = computed(() => {
         running = running ? `${running}/${part}` : part
         return { name: part, path: running }
     })
+})
+
+const mountExpiryLabel = computed(() => {
+    if (!props.mount?.expires_at) return null
+
+    const date = new Date(props.mount.expires_at)
+
+    if (Number.isNaN(date.getTime())) {
+        return null
+    }
+
+    return date.toLocaleString()
 })
 
 const confirmTitle = computed(() => {
@@ -438,10 +452,6 @@ function filesJsonUrl(params: URLSearchParams) {
 function fileDownloadUrl(entry: FileEntry) {
     const encodedPath = encodeURIComponent(entry.path)
 
-    if (isBackupMode.value) {
-        return `${mountedBackupBaseUrl()}/download?path=${encodedPath}`
-    }
-
     return `/cells/${cellId.value}/files/download?path=${encodedPath}`
 }
 
@@ -610,7 +620,55 @@ function goUp() {
 }
 
 function downloadFile(entry: FileEntry) {
+    if (isBackupMode.value) return
+
     window.location.href = fileDownloadUrl(entry)
+}
+
+async function unmountBackup() {
+    if (
+        !isBackupMode.value ||
+        !cellId.value ||
+        !props.mount?.id ||
+        unmountingBackup.value
+    ) {
+        return
+    }
+
+    unmountingBackup.value = true
+    error.value = ''
+
+    try {
+        const response = await fetch(
+            mountedBackupBaseUrl(),
+            {
+                method: 'DELETE',
+                credentials: 'same-origin',
+                headers: {
+                    Accept: 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRF-TOKEN': csrfToken(),
+                },
+            },
+        )
+
+        if (!response.ok) {
+            showError(
+                await responseError(
+                    response,
+                    'Failed to unmount backup.',
+                ),
+            )
+
+            return
+        }
+
+        router.visit(`/cells/${cellId.value}/backups`)
+    } catch {
+        showError('Failed to connect to the server.')
+    } finally {
+        unmountingBackup.value = false
+    }
 }
 
 function openConfirm(action: ConfirmAction, entry: FileEntry) {
@@ -966,6 +1024,13 @@ onUnmounted(() => {
                                     >
                                         Read Only
                                     </span>
+
+                                    <span
+                                        v-if="isBackupMode && mountExpiryLabel"
+                                        class="text-xs font-bold text-zinc-500"
+                                    >
+                                        Expires {{ mountExpiryLabel }}
+                                    </span>
                                 </div>
                             </div>
 
@@ -978,6 +1043,17 @@ onUnmounted(() => {
                                 <button class="inline-flex items-center gap-2 rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 transition hover:border-hive hover:text-hive" @click="loadFiles(currentPath, true)">
                                     <RefreshCw class="size-4" />
                                     Refresh
+                                </button>
+
+                                <button
+                                    v-if="isBackupMode"
+                                    type="button"
+                                    class="inline-flex items-center gap-2 rounded-button border border-status-danger/30 bg-status-danger/10 px-4 py-2 text-sm font-black text-status-danger transition hover:border-status-danger hover:bg-status-danger/20 disabled:cursor-not-allowed disabled:opacity-50"
+                                    :disabled="unmountingBackup"
+                                    @click="unmountBackup"
+                                >
+                                    <LogOut class="size-4" />
+                                    {{ unmountingBackup ? 'Unmounting...' : 'Unmount Backup' }}
                                 </button>
 
                                 <button
@@ -1121,7 +1197,12 @@ onUnmounted(() => {
                             </div>
 
                             <div class="flex justify-end gap-2">
-                                <button v-if="!isFolder(entry)" class="text-zinc-500 transition hover:text-hive" @click.stop="downloadFile(entry)">
+                                <button
+                                    v-if="!isBackupMode && !isFolder(entry)"
+                                    class="text-zinc-500 transition hover:text-hive"
+                                    title="Download"
+                                    @click.stop="downloadFile(entry)"
+                                >
                                     <Download class="size-4" />
                                 </button>
 

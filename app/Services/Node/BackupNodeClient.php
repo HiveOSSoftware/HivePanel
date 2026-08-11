@@ -154,6 +154,25 @@ class BackupNodeClient
             ->json();
     }
 
+    public function restoreMountedBackupPath(
+        Cell $cell,
+        BackupMount $mount,
+        string $path,
+    ): array {
+        return $this->nodeClient
+            ->client($cell->node)
+            ->post(
+                "/cells/{$this->cellID($cell)}/backup-mounts/"
+                .rawurlencode($mount->id)
+                .'/restore',
+                [
+                    'path' => $path,
+                ],
+            )
+            ->throw()
+            ->json();
+    }
+
     private function cellID(Cell $cell): string
     {
         return rawurlencode($cell->daemon_id);

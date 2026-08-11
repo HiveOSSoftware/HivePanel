@@ -11,6 +11,9 @@ use App\Services\Node\CellNodeClient;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Inertia\Inertia;
+use Inertia\Response;
+use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 use Throwable;
 
 class CellBackupMountController extends CellBaseController
@@ -21,8 +24,9 @@ class CellBackupMountController extends CellBaseController
         string $backup,
         CellNodeClient $cells,
         BackupNodeClient $backups,
-    ): JsonResponse {
+    ): JsonResponse|SymfonyResponse {
         $cell = $this->panelCellOrFail($id);
+
         if ($response = $this->installationPageIfNeeded($cell)) {
             return $response;
         }
@@ -105,28 +109,70 @@ class CellBackupMountController extends CellBaseController
         }
     }
 
+    public function index(
+        Request $request,
+        string $id,
+        string $mount,
+        CellNodeClient $cells,
+    ): Response|SymfonyResponse {
+        $cell = $this->panelCellOrFail($id);
+
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
+
+        $mountModel = $this->mountOrFail(
+            $cell->id,
+            $mount,
+        );
+
+        if (! $mountModel->isBrowsable()) {
+            abort(
+                409,
+                $mountModel->hasExpired()
+                    ? 'This backup mount has expired.'
+                    : 'This backup is not currently mounted.',
+            );
+        }
+
+        $mountModel->loadMissing('backup');
+
+        $workerCell = $this->getCellOrFail(
+            $cell,
+            $cells,
+        );
+
+        return Inertia::render('Cells/Files', [
+            'cell' => $workerCell,
+            'mode' => 'backup',
+            'mount' => $this->mountData($mountModel),
+            'backup' => [
+                'id' => $mountModel->backup->id,
+                'name' => $mountModel->backup->name,
+            ],
+            'initialPath' => (string) $request->query(
+                'path',
+                '',
+            ),
+        ]);
+    }
+
     public function unmount(
         string $id,
-        string $backup,
         string $mount,
         CellNodeClient $cells,
         BackupNodeClient $backups,
-    ): JsonResponse {
+    ): JsonResponse|SymfonyResponse {
         $cell = $this->panelCellOrFail($id);
+
         if ($response = $this->installationPageIfNeeded($cell)) {
             return $response;
         }
 
         $this->abortIfLocked($cell, $cells);
 
-        $backupModel = $this->backupOrFail(
-            $cell->id,
-            $backup,
-        );
-
         $mountModel = $this->mountOrFail(
             $cell->id,
-            $backupModel->id,
             $mount,
         );
 
@@ -170,7 +216,7 @@ class CellBackupMountController extends CellBaseController
         } catch (Throwable $exception) {
             Log::error('Unable to unmount backup', [
                 'cell_id' => $cell->id,
-                'backup_id' => $backupModel->id,
+                'backup_id' => $mountModel->backup_id,
                 'mount_id' => $mountModel->id,
                 'exception' => $exception,
             ]);
@@ -186,23 +232,17 @@ class CellBackupMountController extends CellBaseController
     public function files(
         Request $request,
         string $id,
-        string $backup,
         string $mount,
         BackupNodeClient $backups,
-    ): JsonResponse {
+    ): JsonResponse|SymfonyResponse {
         $cell = $this->panelCellOrFail($id);
+
         if ($response = $this->installationPageIfNeeded($cell)) {
             return $response;
         }
 
-        $backupModel = $this->backupOrFail(
-            $cell->id,
-            $backup,
-        );
-
         $mountModel = $this->mountOrFail(
             $cell->id,
-            $backupModel->id,
             $mount,
         );
 
@@ -246,7 +286,7 @@ class CellBackupMountController extends CellBaseController
         } catch (Throwable $exception) {
             Log::error('Unable to list mounted backup files', [
                 'cell_id' => $cell->id,
-                'backup_id' => $backupModel->id,
+                'backup_id' => $mountModel->backup_id,
                 'mount_id' => $mountModel->id,
                 'path' => $validated['path'] ?? '',
                 'exception' => $exception,
@@ -254,6 +294,84 @@ class CellBackupMountController extends CellBaseController
 
             return response()->json([
                 'message' => 'The mounted backup files could not be loaded.',
+            ], 502);
+        }
+    }
+
+    public function restorePath(
+        Request $request,
+        string $id,
+        string $mount,
+        CellNodeClient $cells,
+        BackupNodeClient $backups,
+    ): JsonResponse|SymfonyResponse {
+        $cell = $this->panelCellOrFail($id);
+
+        if ($response = $this->installationPageIfNeeded($cell)) {
+            return $response;
+        }
+
+        $this->abortIfLocked($cell, $cells);
+
+        $mountModel = $this->mountOrFail(
+            $cell->id,
+            $mount,
+        );
+
+        if (! $mountModel->isBrowsable()) {
+            return response()->json([
+                'message' => $mountModel->hasExpired()
+                    ? 'This backup mount has expired.'
+                    : 'This backup is not currently mounted.',
+            ], 409);
+        }
+
+        $validated = $request->validate([
+            'path' => [
+                'required',
+                'string',
+                'max:4096',
+            ],
+        ]);
+
+        $path = trim(
+            str_replace(
+                '\\',
+                '/',
+                $validated['path'],
+            ),
+            '/',
+        );
+
+        if ($path === '') {
+            return response()->json([
+                'message' => 'A backup file or folder path is required.',
+            ], 422);
+        }
+
+        try {
+            $result = $backups->restoreMountedBackupPath(
+                cell: $cell,
+                mount: $mountModel,
+                path: $path,
+            );
+
+            return response()->json([
+                'message' => 'Backup item restored successfully.',
+                'path' => $path,
+                'result' => $result,
+            ]);
+        } catch (Throwable $exception) {
+            Log::error('Unable to restore mounted backup path', [
+                'cell_id' => $cell->id,
+                'backup_id' => $mountModel->backup_id,
+                'mount_id' => $mountModel->id,
+                'path' => $path,
+                'exception' => $exception,
+            ]);
+
+            return response()->json([
+                'message' => 'The selected backup item could not be restored.',
             ], 502);
         }
     }
@@ -270,12 +388,10 @@ class CellBackupMountController extends CellBaseController
 
     private function mountOrFail(
         string $cellID,
-        string $backupID,
         string $mountID,
     ): BackupMount {
         return BackupMount::query()
             ->where('cell_id', $cellID)
-            ->where('backup_id', $backupID)
             ->whereKey($mountID)
             ->firstOrFail();
     }
