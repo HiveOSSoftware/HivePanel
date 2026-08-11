@@ -129,6 +129,19 @@ class CellNodeClient
         }
     }
 
+    public function recreateMissingCell(Cell $cell): array
+    {
+        $cell->loadMissing([
+            'node',
+            'allocation',
+        ]);
+
+        return $this->nodeClient->client($cell->node)->post('/cells', [
+            'id' => $cell->daemon_id,
+            ...$this->definitionPayload($cell),
+        ])->throw()->json();
+    }
+
     public function definitionPayload(Cell $cell): array
     {
         $cell->loadMissing('allocation');

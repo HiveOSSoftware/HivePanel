@@ -89,6 +89,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
             Route::get('{cell}/sync', [AdminCellSyncController::class, 'show'])->name('sync.show');
             Route::post('{cell}/sync', [AdminCellSyncController::class, 'repair'])->name('sync.repair');
+            Route::post('{cell}/sync/recreate', [AdminCellSyncController::class, 'recreate'])->name('sync.recreate');
 
             Route::get('{cell}', [AdminCellController::class, 'show'])->name('show');
         });

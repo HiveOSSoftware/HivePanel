@@ -166,6 +166,44 @@ class CellSyncService
         return $differences;
     }
 
+    public function recreateMissing(Cell $cell): array
+    {
+        $inspection = $this->inspect($cell);
+
+        if ($inspection['status'] !== 'missing') {
+            throw new RuntimeException('This Cell is not missing from the Worker.');
+        }
+
+        if (! $cell->node) {
+            throw new RuntimeException('This Cell is not assigned to a node.');
+        }
+
+        if (! $cell->daemon_id) {
+            throw new RuntimeException('This Cell does not have a daemon ID.');
+        }
+
+        if (! $cell->allocation) {
+            throw new RuntimeException('This Cell does not have an allocation.');
+        }
+
+        $created = $this->cells->recreateMissingCell($cell);
+
+        if (($created['id'] ?? null) !== $cell->daemon_id) {
+            throw new RuntimeException('The Worker recreated the Cell with an unexpected ID.');
+        }
+
+        $result = $this->inspect($cell->fresh([
+            'node',
+            'allocation',
+        ]));
+
+        if (! $result['synced']) {
+            throw new RuntimeException('The Worker Cell was recreated but is still out of sync.');
+        }
+
+        return $result;
+    }
+
     private function normalise(array $value): array
     {
         return $this->normaliseValue($value);

@@ -48,6 +48,10 @@ const props = defineProps<{
 const showDeleteModal = ref(false)
 const deleting = ref(false)
 
+const showRecreateModal = ref(false)
+const recreateConfirmation = ref('')
+const recreatingSync = ref(false)
+
 const syncResult = ref<SyncResult | null>(null)
 const checkingSync = ref(false)
 const repairingSync = ref(false)
@@ -56,6 +60,10 @@ const isInstalled = computed(() => props.cell.install_status === 'installed')
 const isInstalling = computed(() => props.cell.install_status === 'installing')
 const isPending = computed(() => props.cell.install_status === 'pending')
 const isFailed = computed(() => props.cell.install_status === 'failed')
+
+const canConfirmRecreate = computed(() =>
+    recreateConfirmation.value === props.cell.name && !recreatingSync.value
+)
 
 const syncStatusLabel = computed(() => {
     switch (syncResult.value?.status) {
@@ -114,8 +122,20 @@ function deleteCell() {
     })
 }
 
+function openRecreateModal() {
+    recreateConfirmation.value = ''
+    showRecreateModal.value = true
+}
+
+function closeRecreateModal() {
+    if (recreatingSync.value) return
+
+    recreateConfirmation.value = ''
+    showRecreateModal.value = false
+}
+
 async function checkWorkerSync() {
-    if (checkingSync.value || repairingSync.value) return
+    if (checkingSync.value || repairingSync.value || recreatingSync.value) return
 
     checkingSync.value = true
 
@@ -136,7 +156,7 @@ async function checkWorkerSync() {
 }
 
 async function repairWorkerSync() {
-    if (repairingSync.value || checkingSync.value || !syncResult.value?.repairable) return
+    if (repairingSync.value || checkingSync.value || recreatingSync.value || !syncResult.value?.repairable) return
 
     repairingSync.value = true
 
@@ -153,6 +173,32 @@ async function repairWorkerSync() {
         }
     } finally {
         repairingSync.value = false
+    }
+}
+
+async function recreateWorkerCell() {
+    if (!canConfirmRecreate.value) return
+
+    recreatingSync.value = true
+
+    try {
+        const response = await axios.post(`/admin/cells/${props.cell.id}/sync/recreate`)
+        syncResult.value = response.data
+        recreateConfirmation.value = ''
+        showRecreateModal.value = false
+    } catch (error: any) {
+        syncResult.value = error.response?.data || {
+            status: 'error',
+            synced: false,
+            repairable: false,
+            message: 'Unable to recreate the Worker Cell.',
+            differences: [],
+        }
+
+        recreateConfirmation.value = ''
+        showRecreateModal.value = false
+    } finally {
+        recreatingSync.value = false
     }
 }
 
@@ -625,7 +671,7 @@ onMounted(() => {
                                                 >
                                                     <span
                                                         class="size-1.5 rounded-full bg-current"
-                                                        :class="{ 'animate-pulse': checkingSync }"
+                                                        :class="{ 'animate-pulse': checkingSync || recreatingSync }"
                                                     />
 
                                                     {{ syncStatusLabel }}
@@ -641,7 +687,7 @@ onMounted(() => {
                                     <button
                                         type="button"
                                         class="inline-flex shrink-0 items-center justify-center gap-2 rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 transition hover:border-hive hover:text-hive disabled:cursor-not-allowed disabled:opacity-50"
-                                        :disabled="checkingSync || repairingSync"
+                                        :disabled="checkingSync || repairingSync || recreatingSync"
                                         @click="checkWorkerSync"
                                     >
                                         <RefreshCw
@@ -747,7 +793,7 @@ onMounted(() => {
                                             v-if="syncResult.repairable"
                                             type="button"
                                             class="mt-4 inline-flex items-center justify-center gap-2 rounded-button border border-hive bg-hive px-4 py-2.5 text-sm font-black text-black transition hover:bg-hive-light disabled:cursor-not-allowed disabled:opacity-50"
-                                            :disabled="repairingSync || checkingSync"
+                                            :disabled="repairingSync || checkingSync || recreatingSync"
                                             @click="repairWorkerSync"
                                         >
                                             <RefreshCw
@@ -771,7 +817,7 @@ onMounted(() => {
                                         <div class="flex items-start gap-3">
                                             <Server class="mt-0.5 size-5 shrink-0 text-status-danger" />
 
-                                            <div>
+                                            <div class="min-w-0 flex-1">
                                                 <div class="text-sm font-black text-status-danger">
                                                     Worker Cell Missing
                                                 </div>
@@ -782,8 +828,37 @@ onMounted(() => {
                                                 </p>
 
                                                 <p class="mt-2 text-xs leading-5 text-zinc-500">
-                                                    Automatic recreation is currently disabled to prevent HivePanel and the Worker from ending up with different daemon IDs.
+                                                    HivePanel can recreate the missing Worker definition using the existing daemon ID, allocation, Comb, variables and resource limits.
                                                 </p>
+
+                                                <div class="mt-4 rounded-button border border-status-danger/20 bg-black/20 p-4">
+                                                    <div class="text-xs font-black uppercase tracking-wide text-status-danger">
+                                                        Recovery safeguard
+                                                    </div>
+
+                                                    <p class="mt-2 text-xs leading-5 text-zinc-400">
+                                                        The Worker will refuse recreation if a Cell or instance directory with this daemon ID already exists. Existing filesystem data will not be overwritten by this recovery action.
+                                                    </p>
+                                                </div>
+
+                                                <button
+                                                    type="button"
+                                                    class="mt-4 inline-flex items-center justify-center gap-2 rounded-button border border-status-danger bg-status-danger px-4 py-2.5 text-sm font-black text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                                                    :disabled="checkingSync || repairingSync || recreatingSync"
+                                                    @click="openRecreateModal"
+                                                >
+                                                    <RefreshCw
+                                                        v-if="recreatingSync"
+                                                        class="size-4 animate-spin"
+                                                    />
+
+                                                    <Server
+                                                        v-else
+                                                        class="size-4"
+                                                    />
+
+                                                    {{ recreatingSync ? 'Recreating...' : 'Recreate Worker Cell' }}
+                                                </button>
                                             </div>
                                         </div>
                                     </div>
@@ -988,5 +1063,89 @@ onMounted(() => {
             @cancel="showDeleteModal = false"
             @confirm="deleteCell"
         />
+
+        <Teleport to="body">
+            <div
+                v-if="showRecreateModal"
+                class="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+                @click.self="closeRecreateModal"
+            >
+                <div class="w-full max-w-lg rounded-panel border border-status-danger/30 bg-surface p-5 shadow-2xl sm:p-6">
+                    <div class="flex items-start gap-3">
+                        <div class="flex size-11 shrink-0 items-center justify-center rounded-button border border-status-danger/30 bg-status-danger/10 text-status-danger">
+                            <Server class="size-5" />
+                        </div>
+
+                        <div>
+                            <h2 class="text-lg font-black text-white">
+                                Recreate Worker Cell?
+                            </h2>
+
+                            <p class="mt-1 text-sm leading-6 text-zinc-400">
+                                This will recreate the missing Worker definition using HivePanel's existing daemon ID and stored configuration.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="mt-5 rounded-button border border-status-warning/30 bg-status-warning/10 p-4">
+                        <div class="flex items-start gap-3">
+                            <CircleAlert class="mt-0.5 size-5 shrink-0 text-status-warning" />
+
+                            <p class="text-sm leading-6 text-zinc-300">
+                                This does not silently generate a new daemon ID. The Worker must recreate
+                                <span class="font-mono font-black text-white">{{ cell.daemon_id }}</span>
+                                exactly. The Worker will refuse the operation if that Cell or its instance directory already exists.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="mt-5">
+                        <label class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                            Type <span class="text-white">{{ cell.name }}</span> to confirm
+                        </label>
+
+                        <input
+                            v-model="recreateConfirmation"
+                            type="text"
+                            autocomplete="off"
+                            class="mt-2 w-full rounded-button border border-zinc-800 bg-[#0d0f11] px-4 py-3 text-sm font-bold text-white outline-none transition placeholder:text-zinc-700 focus:border-status-danger"
+                            :placeholder="cell.name"
+                            :disabled="recreatingSync"
+                            @keyup.enter="recreateWorkerCell"
+                        />
+                    </div>
+
+                    <div class="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                        <button
+                            type="button"
+                            class="inline-flex items-center justify-center rounded-button border border-zinc-800 bg-surface-light px-4 py-2.5 text-sm font-bold text-zinc-300 transition hover:border-zinc-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                            :disabled="recreatingSync"
+                            @click="closeRecreateModal"
+                        >
+                            Cancel
+                        </button>
+
+                        <button
+                            type="button"
+                            class="inline-flex items-center justify-center gap-2 rounded-button border border-status-danger bg-status-danger px-4 py-2.5 text-sm font-black text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                            :disabled="!canConfirmRecreate"
+                            @click="recreateWorkerCell"
+                        >
+                            <RefreshCw
+                                v-if="recreatingSync"
+                                class="size-4 animate-spin"
+                            />
+
+                            <Server
+                                v-else
+                                class="size-4"
+                            />
+
+                            {{ recreatingSync ? 'Recreating...' : 'Recreate Worker Cell' }}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </Teleport>
     </AppLayout>
 </template>
