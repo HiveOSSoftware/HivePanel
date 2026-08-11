@@ -7,13 +7,16 @@ use App\Models\AuditLog;
 use App\Models\Cell;
 use App\Models\Node;
 use App\Models\User;
-use Inertia\Inertia;
+use App\Services\Node\NodeClient;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Inertia\Inertia;
+use Throwable;
 
 class AdminDashboardController extends Controller
 {
-    public function __invoke()
+    public function __invoke(NodeClient $nodeClient)
     {
         return Inertia::render('Admin/Dashboard', [
             'stats' => [
@@ -44,6 +47,7 @@ class AdminDashboardController extends Controller
                     ] : null,
                 ]),
             'versionStatus' => $this->versionStatus(),
+            'workerVersions' => $this->workerVersions($nodeClient),
             'quickLinks' => [
                 [
                     'label' => 'Get Help',
@@ -88,7 +92,7 @@ class AdminDashboardController extends Controller
                 }
 
                 return ltrim((string) $response->json('tag_name'), 'v');
-            } catch (\Throwable) {
+            } catch (Throwable) {
                 return null;
             }
         });
@@ -99,5 +103,68 @@ class AdminDashboardController extends Controller
             'is_outdated' => $latest ? version_compare($current, $latest, '<') : false,
             'checked' => $latest !== null,
         ];
+    }
+
+    private function workerVersions(NodeClient $nodeClient): array
+    {
+        return Node::query()
+            ->where('is_active', true)
+            ->orderBy('name')
+            ->get()
+            ->map(function (Node $node) use ($nodeClient) {
+                return Cache::remember("hivepanel.worker_version.{$node->id}", now()->addSeconds(30), function () use ($node, $nodeClient) {
+                    try {
+                        $response = $nodeClient->client($node)->get('/version');
+
+                        if ($response->status() === 404) {
+                            return [
+                                'id' => $node->id,
+                                'name' => $node->name,
+                                'version' => null,
+                                'reachable' => true,
+                                'version_available' => false,
+                            ];
+                        }
+
+                        if (! $response->successful()) {
+                            return [
+                                'id' => $node->id,
+                                'name' => $node->name,
+                                'version' => null,
+                                'reachable' => true,
+                                'version_available' => false,
+                            ];
+                        }
+
+                        $version = trim((string) $response->json('version'));
+
+                        return [
+                            'id' => $node->id,
+                            'name' => $node->name,
+                            'version' => $version !== '' ? $version : null,
+                            'reachable' => true,
+                            'version_available' => $version !== '',
+                        ];
+                    } catch (ConnectionException) {
+                        return [
+                            'id' => $node->id,
+                            'name' => $node->name,
+                            'version' => null,
+                            'reachable' => false,
+                            'version_available' => false,
+                        ];
+                    } catch (Throwable) {
+                        return [
+                            'id' => $node->id,
+                            'name' => $node->name,
+                            'version' => null,
+                            'reachable' => false,
+                            'version_available' => false,
+                        ];
+                    }
+                });
+            })
+            ->values()
+            ->all();
     }
 }
