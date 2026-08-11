@@ -45,25 +45,47 @@ const props = defineProps<{
     cell: Cell
 }>()
 
+const installStatus = ref<InstallStatus>(
+    props.cell.install_status,
+)
+
+const installStatusLabel = ref(
+    props.cell.install_status_label,
+)
+
+const failureReason = ref<string | null>(
+    props.cell.install_failure_reason ?? null,
+)
+
 const refreshing = ref(false)
+const retrying = ref(false)
+const pollingError = ref('')
 
 let refreshTimer: number | null = null
 
 const isPending = computed(() => {
-    return props.cell.install_status === 'pending'
+    return installStatus.value === 'pending'
 })
 
 const isInstalling = computed(() => {
-    return props.cell.install_status === 'installing'
+    return installStatus.value === 'installing'
+})
+
+const isInstalled = computed(() => {
+    return installStatus.value === 'installed'
 })
 
 const isFailed = computed(() => {
-    return props.cell.install_status === 'failed'
+    return installStatus.value === 'failed'
 })
 
 const pageTitle = computed(() => {
     if (isFailed.value) {
         return `${props.cell.name} Installation Failed`
+    }
+
+    if (isInstalled.value) {
+        return `${props.cell.name} Installed`
     }
 
     return `${props.cell.name} Installing`
@@ -110,6 +132,14 @@ const statusClass = computed(() => {
         ]
     }
 
+    if (isInstalled.value) {
+        return [
+            'border-status-success/30',
+            'bg-status-success/10',
+            'text-status-success',
+        ]
+    }
+
     if (isPending.value) {
         return [
             'border-status-warning/30',
@@ -125,35 +155,145 @@ const statusClass = computed(() => {
     ]
 })
 
-function refreshPage() {
+function stopPolling() {
+    if (refreshTimer !== null) {
+        window.clearInterval(refreshTimer)
+        refreshTimer = null
+    }
+}
+
+function startPolling() {
+    stopPolling()
+
+    if (
+        isInstalled.value ||
+        isFailed.value
+    ) {
+        return
+    }
+
+    refreshTimer = window.setInterval(
+        refreshStatus,
+        2500,
+    )
+}
+
+async function refreshStatus() {
     if (refreshing.value) {
         return
     }
 
     refreshing.value = true
+    pollingError.value = ''
 
-    router.reload({
-        only: ['cell'],
-        preserveScroll: true,
+    try {
+        const response = await fetch(
+            `/cells/${props.cell.id}/installation-status`,
+            {
+                credentials: 'same-origin',
+                headers: {
+                    Accept: 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+            },
+        )
 
-        onFinish: () => {
-            refreshing.value = false
+        if (!response.ok) {
+            pollingError.value =
+                'Unable to check the current installation status.'
+
+            return
+        }
+
+        const data = await response.json()
+
+        installStatus.value =
+            data.install_status ??
+            installStatus.value
+
+        installStatusLabel.value =
+            data.install_status_label ??
+            installStatusLabel.value
+
+        failureReason.value =
+            data.install_failure_reason ??
+            null
+
+        if (installStatus.value === 'installed') {
+            stopPolling()
+
+            router.visit(
+                `/cells/${props.cell.id}`,
+                {
+                    preserveScroll: false,
+                },
+            )
+
+            return
+        }
+
+        if (installStatus.value === 'failed') {
+            stopPolling()
+        }
+    } catch {
+        pollingError.value =
+            'Unable to connect to HivePanel to check the installation status.'
+    } finally {
+        refreshing.value = false
+    }
+}
+
+async function retryInstallation() {
+    if (retrying.value) {
+        return
+    }
+
+    retrying.value = true
+    pollingError.value = ''
+
+    router.post(
+        `/cells/${props.cell.id}/installation/retry`,
+        {},
+        {
+            preserveScroll: true,
+
+            onSuccess: () => {
+                installStatus.value = 'pending'
+                installStatusLabel.value = 'Pending'
+                failureReason.value = null
+
+                startPolling()
+            },
+
+            onError: () => {
+                pollingError.value =
+                    'The installation could not be retried.'
+            },
+
+            onFinish: () => {
+                retrying.value = false
+            },
         },
-    })
+    )
 }
 
 onMounted(() => {
+    if (isInstalled.value) {
+        router.visit(
+            `/cells/${props.cell.id}`,
+        )
+
+        return
+    }
+
     if (!isFailed.value) {
-        refreshTimer = window.setInterval(() => {
-            refreshPage()
-        }, 5000)
+        refreshStatus()
+        startPolling()
     }
 })
 
 onUnmounted(() => {
-    if (refreshTimer !== null) {
-        window.clearInterval(refreshTimer)
-    }
+    stopPolling()
 })
 </script>
 
@@ -190,6 +330,11 @@ onUnmounted(() => {
                                         class="size-4"
                                     />
 
+                                    <CheckCircle2
+                                        v-else-if="isInstalled"
+                                        class="size-4"
+                                    />
+
                                     <Clock3
                                         v-else-if="isPending"
                                         class="size-4"
@@ -200,7 +345,7 @@ onUnmounted(() => {
                                         class="size-4 animate-spin"
                                     />
 
-                                    {{ cell.install_status_label }}
+                                    {{ installStatusLabel }}
                                 </div>
                             </div>
                         </div>
@@ -213,6 +358,11 @@ onUnmounted(() => {
                                 >
                                     <AlertTriangle
                                         v-if="isFailed"
+                                        class="size-9"
+                                    />
+
+                                    <CheckCircle2
+                                        v-else-if="isInstalled"
                                         class="size-9"
                                     />
 
@@ -237,7 +387,7 @@ onUnmounted(() => {
                             </div>
 
                             <div
-                                v-if="!isFailed"
+                                v-if="!isFailed && !isInstalled"
                                 class="mt-8 overflow-hidden rounded-full bg-zinc-900"
                             >
                                 <div
@@ -247,6 +397,19 @@ onUnmounted(() => {
                                         'installation-progress': isInstalling,
                                     }"
                                 />
+                            </div>
+
+                            <div
+                                v-if="pollingError"
+                                class="mt-8 rounded-button border border-status-warning/30 bg-status-warning/10 p-4"
+                            >
+                                <div class="flex items-start gap-3">
+                                    <AlertTriangle class="mt-0.5 size-5 shrink-0 text-status-warning" />
+
+                                    <div class="text-sm font-bold text-status-warning">
+                                        {{ pollingError }}
+                                    </div>
+                                </div>
                             </div>
 
                             <div
@@ -261,7 +424,7 @@ onUnmounted(() => {
                                             Worker error
                                         </div>
 
-                                        <pre class="mt-3 whitespace-pre-wrap break-words font-mono text-xs leading-6 text-zinc-300">{{ cell.install_failure_reason || 'No installation error was provided.' }}</pre>
+                                        <pre class="mt-3 whitespace-pre-wrap break-words font-mono text-xs leading-6 text-zinc-300">{{ failureReason || 'No installation error was provided.' }}</pre>
                                     </div>
                                 </div>
                             </div>
@@ -305,25 +468,49 @@ onUnmounted(() => {
                                     Back to Cells
                                 </Link>
 
-                                <button
-                                    type="button"
-                                    class="inline-flex items-center justify-center gap-2 rounded-button border border-hive bg-hive px-4 py-2.5 text-sm font-black text-black transition hover:bg-hive/90 disabled:cursor-not-allowed disabled:opacity-60"
-                                    :disabled="refreshing"
-                                    @click="refreshPage"
-                                >
-                                    <RefreshCw
-                                        class="size-4"
-                                        :class="{
-                                            'animate-spin': refreshing,
-                                        }"
-                                    />
+                                <div class="flex flex-col gap-3 sm:flex-row">
+                                    <button
+                                        v-if="isFailed"
+                                        type="button"
+                                        class="inline-flex items-center justify-center gap-2 rounded-button border border-hive bg-hive px-4 py-2.5 text-sm font-black text-black transition hover:bg-hive/90 disabled:cursor-not-allowed disabled:opacity-60"
+                                        :disabled="retrying"
+                                        @click="retryInstallation"
+                                    >
+                                        <RefreshCw
+                                            class="size-4"
+                                            :class="{
+                                                'animate-spin': retrying,
+                                            }"
+                                        />
 
-                                    {{
-                                        refreshing
-                                            ? 'Checking...'
-                                            : 'Check Status'
-                                    }}
-                                </button>
+                                        {{
+                                            retrying
+                                                ? 'Retrying...'
+                                                : 'Retry Installation'
+                                        }}
+                                    </button>
+
+                                    <button
+                                        v-else-if="!isInstalled"
+                                        type="button"
+                                        class="inline-flex items-center justify-center gap-2 rounded-button border border-zinc-800 bg-surface-light px-4 py-2.5 text-sm font-bold text-zinc-300 transition hover:border-hive hover:text-hive disabled:cursor-not-allowed disabled:opacity-60"
+                                        :disabled="refreshing"
+                                        @click="refreshStatus"
+                                    >
+                                        <RefreshCw
+                                            class="size-4"
+                                            :class="{
+                                                'animate-spin': refreshing,
+                                            }"
+                                        />
+
+                                        {{
+                                            refreshing
+                                                ? 'Checking...'
+                                                : 'Check Status'
+                                        }}
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </section>

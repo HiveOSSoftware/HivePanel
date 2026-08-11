@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Admin\AdminDashboardController;
 // Cells
 use App\Http\Controllers\Admin\AdminCellController;
+use App\Http\Controllers\Admin\AdminCellSyncController;
 // Nodes
 use App\Http\Controllers\Admin\AdminNodeController;
 use App\Http\Controllers\Admin\AdminNodeAllocationController;
@@ -85,6 +86,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('{cell}/edit', [AdminCellController::class, 'edit'])->name('edit');
             Route::patch('{cell}', [AdminCellController::class, 'update'])->name('update');
             Route::delete('{cell}', [AdminCellController::class, 'destroy'])->name('destroy');
+
+            Route::get('{cell}/sync', [AdminCellSyncController::class, 'show'])->name('sync.show');
+            Route::post('{cell}/sync', [AdminCellSyncController::class, 'repair'])->name('sync.repair');
 
             Route::get('{cell}', [AdminCellController::class, 'show'])->name('show');
         });
@@ -212,6 +216,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
             ->middleware('cell.permission:' . CellPermissions::SETTINGS_UPDATE);
         Route::post('/{id}/installation/retry', [CellReinstallController::class, 'retry'])->name('installation.retry')
             ->middleware('cell.permission:' . CellPermissions::SETTINGS_UPDATE);
+        Route::get('/{id}/installation-status', [CellController::class, 'installationStatus'])->name('installation-status')
+            ->middleware('cell.permission:' . CellPermissions::CONSOLE_VIEW);
 
         Route::get('/{id}/config', [CellConfigController::class, 'index'])->name('config.index')
             ->middleware('cell.permission:' . CellPermissions::SETTINGS_VIEW);

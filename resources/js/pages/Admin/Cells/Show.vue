@@ -2,6 +2,7 @@
 import ConfirmationModal from '@/components/ui/ConfirmationModal.vue'
 import AppLayout from '@/layouts/AppLayout.vue'
 import { Head, Link, router } from '@inertiajs/vue3'
+import axios from 'axios'
 import {
     ArrowLeft,
     Boxes,
@@ -14,11 +15,31 @@ import {
     HardDrive,
     MemoryStick,
     Network,
+    RefreshCw,
     Server,
+    ShieldCheck,
     Trash2,
     User,
+    WifiOff,
+    Wrench,
 } from 'lucide-vue-next'
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+
+type SyncDifference = {
+    field: string
+    panel: any
+    worker: any
+}
+
+type SyncResult = {
+    status: 'synced' | 'out_of_sync' | 'missing' | 'unreachable' | 'error'
+    synced: boolean
+    repairable: boolean
+    message: string
+    differences: SyncDifference[]
+    expected?: Record<string, any>
+    actual?: Record<string, any>
+}
 
 const props = defineProps<{
     cell: any
@@ -27,10 +48,58 @@ const props = defineProps<{
 const showDeleteModal = ref(false)
 const deleting = ref(false)
 
+const syncResult = ref<SyncResult | null>(null)
+const checkingSync = ref(false)
+const repairingSync = ref(false)
+
 const isInstalled = computed(() => props.cell.install_status === 'installed')
 const isInstalling = computed(() => props.cell.install_status === 'installing')
 const isPending = computed(() => props.cell.install_status === 'pending')
 const isFailed = computed(() => props.cell.install_status === 'failed')
+
+const syncStatusLabel = computed(() => {
+    switch (syncResult.value?.status) {
+        case 'synced':
+            return 'Synced'
+
+        case 'out_of_sync':
+            return 'Out of Sync'
+
+        case 'missing':
+            return 'Worker Cell Missing'
+
+        case 'unreachable':
+            return 'Worker Unavailable'
+
+        case 'error':
+            return 'Sync Check Failed'
+
+        default:
+            return 'Checking Worker'
+    }
+})
+
+const syncStatusDescription = computed(() => {
+    switch (syncResult.value?.status) {
+        case 'synced':
+            return 'HivePanel and the Worker have matching definitions.'
+
+        case 'out_of_sync':
+            return 'The Worker definition differs from the definition stored by HivePanel.'
+
+        case 'missing':
+            return 'This Cell exists in HivePanel but not on the assigned Worker.'
+
+        case 'unreachable':
+            return 'The assigned node could not be contacted.'
+
+        case 'error':
+            return syncResult.value.message || 'HivePanel was unable to inspect this Cell on the Worker.'
+
+        default:
+            return 'Comparing HivePanel with the assigned Worker.'
+    }
+})
 
 function deleteCell() {
     deleting.value = true
@@ -43,6 +112,48 @@ function deleteCell() {
             showDeleteModal.value = false
         },
     })
+}
+
+async function checkWorkerSync() {
+    if (checkingSync.value || repairingSync.value) return
+
+    checkingSync.value = true
+
+    try {
+        const response = await axios.get(`/admin/cells/${props.cell.id}/sync`)
+        syncResult.value = response.data
+    } catch (error: any) {
+        syncResult.value = error.response?.data || {
+            status: 'error',
+            synced: false,
+            repairable: false,
+            message: 'Unable to inspect the Worker cell.',
+            differences: [],
+        }
+    } finally {
+        checkingSync.value = false
+    }
+}
+
+async function repairWorkerSync() {
+    if (repairingSync.value || checkingSync.value || !syncResult.value?.repairable) return
+
+    repairingSync.value = true
+
+    try {
+        const response = await axios.post(`/admin/cells/${props.cell.id}/sync`)
+        syncResult.value = response.data
+    } catch (error: any) {
+        syncResult.value = error.response?.data || {
+            status: 'error',
+            synced: false,
+            repairable: false,
+            message: 'Unable to repair the Worker cell.',
+            differences: [],
+        }
+    } finally {
+        repairingSync.value = false
+    }
 }
 
 function installStatusClass(status?: string) {
@@ -64,6 +175,75 @@ function installStatusClass(status?: string) {
     }
 }
 
+function syncStatusClass(status?: string) {
+    switch (status) {
+        case 'synced':
+            return 'border-status-success/30 bg-status-success/10 text-status-success'
+
+        case 'out_of_sync':
+            return 'border-status-warning/30 bg-status-warning/10 text-status-warning'
+
+        case 'missing':
+            return 'border-status-danger/30 bg-status-danger/10 text-status-danger'
+
+        case 'unreachable':
+        case 'error':
+            return 'border-status-danger/30 bg-status-danger/10 text-status-danger'
+
+        default:
+            return 'border-zinc-700 bg-zinc-800 text-zinc-400'
+    }
+}
+
+function syncDifferenceLabel(field: string) {
+    switch (field) {
+        case 'worker_cell':
+            return 'Worker Cell'
+
+        case 'comb':
+            return 'Comb'
+
+        case 'comb_data':
+            return 'Comb Data'
+
+        case 'variables':
+            return 'Variables'
+
+        case 'allocation':
+            return 'Allocation'
+
+        case 'limits':
+            return 'Resource Limits'
+
+        case 'name':
+            return 'Name'
+
+        default:
+            return field
+                .replaceAll('_', ' ')
+                .replace(/\b\w/g, character => character.toUpperCase())
+    }
+}
+
+function formatSyncValue(value: any) {
+    if (value === null || value === undefined) return 'Missing'
+
+    if (typeof value === 'boolean') {
+        return value ? 'true' : 'false'
+    }
+
+    if (typeof value === 'object') {
+        if (Array.isArray(value) && value.length === 0) return '{}'
+        if (!Array.isArray(value) && Object.keys(value).length === 0) return '{}'
+
+        return JSON.stringify(value, null, 2)
+    }
+
+    if (value === '') return 'Empty'
+
+    return String(value)
+}
+
 function formatDate(value?: string) {
     if (!value) return 'Never'
 
@@ -79,6 +259,10 @@ function formatMb(value?: number) {
 
     return `${value} MB`
 }
+
+onMounted(() => {
+    checkWorkerSync()
+})
 </script>
 
 <template>
@@ -384,6 +568,264 @@ function formatMb(value?: number) {
                                         </div>
                                     </div>
                                 </div>
+                            </section>
+
+                            <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
+                                <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                                    <div class="flex items-start gap-3">
+                                        <div
+                                            class="flex size-10 shrink-0 items-center justify-center rounded-button border"
+                                            :class="syncStatusClass(syncResult?.status)"
+                                        >
+                                            <RefreshCw
+                                                v-if="checkingSync"
+                                                class="size-5 animate-spin"
+                                            />
+
+                                            <CheckCircle2
+                                                v-else-if="syncResult?.status === 'synced'"
+                                                class="size-5"
+                                            />
+
+                                            <Wrench
+                                                v-else-if="syncResult?.status === 'out_of_sync'"
+                                                class="size-5"
+                                            />
+
+                                            <Server
+                                                v-else-if="syncResult?.status === 'missing'"
+                                                class="size-5"
+                                            />
+
+                                            <WifiOff
+                                                v-else-if="syncResult?.status === 'unreachable'"
+                                                class="size-5"
+                                            />
+
+                                            <CircleAlert
+                                                v-else-if="syncResult?.status === 'error'"
+                                                class="size-5"
+                                            />
+
+                                            <ShieldCheck
+                                                v-else
+                                                class="size-5"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <div class="flex flex-wrap items-center gap-2">
+                                                <h2 class="text-lg font-black">
+                                                    Worker Sync
+                                                </h2>
+
+                                                <span
+                                                    class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-black"
+                                                    :class="syncStatusClass(syncResult?.status)"
+                                                >
+                                                    <span
+                                                        class="size-1.5 rounded-full bg-current"
+                                                        :class="{ 'animate-pulse': checkingSync }"
+                                                    />
+
+                                                    {{ syncStatusLabel }}
+                                                </span>
+                                            </div>
+
+                                            <p class="mt-1 text-sm text-zinc-500">
+                                                {{ syncStatusDescription }}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <button
+                                        type="button"
+                                        class="inline-flex shrink-0 items-center justify-center gap-2 rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 transition hover:border-hive hover:text-hive disabled:cursor-not-allowed disabled:opacity-50"
+                                        :disabled="checkingSync || repairingSync"
+                                        @click="checkWorkerSync"
+                                    >
+                                        <RefreshCw
+                                            class="size-4"
+                                            :class="{ 'animate-spin': checkingSync }"
+                                        />
+                                        {{ checkingSync ? 'Checking...' : 'Check Again' }}
+                                    </button>
+                                </div>
+
+                                <div
+                                    v-if="checkingSync && !syncResult"
+                                    class="mt-5 rounded-button border border-zinc-800 bg-[#0d0f11] p-5"
+                                >
+                                    <div class="flex items-center gap-3">
+                                        <RefreshCw class="size-5 animate-spin text-hive" />
+
+                                        <div>
+                                            <div class="text-sm font-black text-white">
+                                                Checking Worker definition
+                                            </div>
+
+                                            <div class="mt-1 text-xs text-zinc-500">
+                                                Contacting {{ cell.node?.name || 'the assigned node' }} and comparing definitions.
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <template v-if="syncResult">
+                                    <div
+                                        v-if="syncResult.status === 'synced'"
+                                        class="mt-5 rounded-button border border-status-success/20 bg-status-success/5 p-4"
+                                    >
+                                        <div class="flex items-start gap-3">
+                                            <CheckCircle2 class="mt-0.5 size-5 shrink-0 text-status-success" />
+
+                                            <div>
+                                                <div class="text-sm font-black text-status-success">
+                                                    Definitions match
+                                                </div>
+
+                                                <p class="mt-1 text-sm leading-6 text-zinc-400">
+                                                    The Cell name, Comb, Comb data, variables, allocation and resource limits stored by the Worker match HivePanel.
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div
+                                        v-else-if="syncResult.status === 'out_of_sync'"
+                                        class="mt-5"
+                                    >
+                                        <div class="rounded-button border border-status-warning/20 bg-status-warning/5 p-4">
+                                            <div class="flex items-start gap-3">
+                                                <CircleAlert class="mt-0.5 size-5 shrink-0 text-status-warning" />
+
+                                                <div>
+                                                    <div class="text-sm font-black text-status-warning">
+                                                        Worker definition is stale
+                                                    </div>
+
+                                                    <p class="mt-1 text-sm leading-6 text-zinc-400">
+                                                        {{ syncResult.differences.length }} {{ syncResult.differences.length === 1 ? 'field differs' : 'fields differ' }} from HivePanel. Repairing will update the Worker's stored definition to match HivePanel.
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div class="mt-4 space-y-3">
+                                            <div
+                                                v-for="difference in syncResult.differences"
+                                                :key="difference.field"
+                                                class="overflow-hidden rounded-button border border-zinc-800 bg-[#0d0f11]"
+                                            >
+                                                <div class="border-b border-zinc-800 px-4 py-3">
+                                                    <div class="text-xs font-black uppercase tracking-wide text-status-warning">
+                                                        {{ syncDifferenceLabel(difference.field) }}
+                                                    </div>
+                                                </div>
+
+                                                <div class="grid divide-y divide-zinc-800 md:grid-cols-2 md:divide-x md:divide-y-0">
+                                                    <div class="min-w-0 p-4">
+                                                        <div class="text-[11px] font-black uppercase tracking-wide text-zinc-500">
+                                                            HivePanel
+                                                        </div>
+
+                                                        <pre class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-6 text-zinc-300">{{ formatSyncValue(difference.panel) }}</pre>
+                                                    </div>
+
+                                                    <div class="min-w-0 p-4">
+                                                        <div class="text-[11px] font-black uppercase tracking-wide text-zinc-500">
+                                                            Worker
+                                                        </div>
+
+                                                        <pre class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-6 text-zinc-300">{{ formatSyncValue(difference.worker) }}</pre>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <button
+                                            v-if="syncResult.repairable"
+                                            type="button"
+                                            class="mt-4 inline-flex items-center justify-center gap-2 rounded-button border border-hive bg-hive px-4 py-2.5 text-sm font-black text-black transition hover:bg-hive-light disabled:cursor-not-allowed disabled:opacity-50"
+                                            :disabled="repairingSync || checkingSync"
+                                            @click="repairWorkerSync"
+                                        >
+                                            <RefreshCw
+                                                v-if="repairingSync"
+                                                class="size-4 animate-spin"
+                                            />
+
+                                            <Wrench
+                                                v-else
+                                                class="size-4"
+                                            />
+
+                                            {{ repairingSync ? 'Repairing...' : 'Repair Cell' }}
+                                        </button>
+                                    </div>
+
+                                    <div
+                                        v-else-if="syncResult.status === 'missing'"
+                                        class="mt-5 rounded-button border border-status-danger/20 bg-status-danger/5 p-4"
+                                    >
+                                        <div class="flex items-start gap-3">
+                                            <Server class="mt-0.5 size-5 shrink-0 text-status-danger" />
+
+                                            <div>
+                                                <div class="text-sm font-black text-status-danger">
+                                                    Worker Cell Missing
+                                                </div>
+
+                                                <p class="mt-1 text-sm leading-6 text-zinc-400">
+                                                    This Cell exists in HivePanel but the Worker has no Cell matching daemon ID
+                                                    <span class="font-mono font-bold text-zinc-300">{{ cell.daemon_id || 'unknown' }}</span>.
+                                                </p>
+
+                                                <p class="mt-2 text-xs leading-5 text-zinc-500">
+                                                    Automatic recreation is currently disabled to prevent HivePanel and the Worker from ending up with different daemon IDs.
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div
+                                        v-else-if="syncResult.status === 'unreachable'"
+                                        class="mt-5 rounded-button border border-status-danger/20 bg-status-danger/5 p-4"
+                                    >
+                                        <div class="flex items-start gap-3">
+                                            <WifiOff class="mt-0.5 size-5 shrink-0 text-status-danger" />
+
+                                            <div>
+                                                <div class="text-sm font-black text-status-danger">
+                                                    Worker Unavailable
+                                                </div>
+
+                                                <p class="mt-1 text-sm leading-6 text-zinc-400">
+                                                    HivePanel could not contact {{ cell.node?.name || 'the assigned node' }}. No definition comparison or repair can be performed until the Worker is reachable.
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div
+                                        v-else-if="syncResult.status === 'error'"
+                                        class="mt-5 rounded-button border border-status-danger/20 bg-status-danger/5 p-4"
+                                    >
+                                        <div class="flex items-start gap-3">
+                                            <CircleAlert class="mt-0.5 size-5 shrink-0 text-status-danger" />
+
+                                            <div>
+                                                <div class="text-sm font-black text-status-danger">
+                                                    Sync Check Failed
+                                                </div>
+
+                                                <p class="mt-1 text-sm leading-6 text-zinc-400">
+                                                    {{ syncResult.message }}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
                             </section>
 
                             <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">

@@ -5,8 +5,8 @@ namespace App\Http\Controllers\Admin;
 use App\Enums\AuditEvent;
 use App\Http\Controllers\Controller;
 use App\Jobs\InstallCellJob;
-use App\Models\Comb;
 use App\Models\Cell;
+use App\Models\Comb;
 use App\Models\Node;
 use App\Models\NodeAllocation;
 use App\Models\User;
@@ -65,6 +65,7 @@ class AdminCellController extends Controller
                     'source' => $comb->source,
                     'data' => $comb->data,
                 ]),
+
             'users' => User::query()
                 ->orderBy('name')
                 ->get(['id', 'name', 'email']),
@@ -431,13 +432,8 @@ class AdminCellController extends Controller
                 'alias' => $cell->allocation->alias,
             ] : null,
 
-            'limits' => [
-                'memory_mb' => data_get($cell->metadata, 'limits.memory_mb'),
-                'disk_mb' => data_get($cell->metadata, 'limits.disk_mb'),
-                'cpu_percent' => data_get($cell->metadata, 'limits.cpu_percent'),
-            ],
-
-            'variables' => data_get($cell->metadata, 'variables', []),
+            'limits' => $cell->limits,
+            'variables' => $cell->variables,
             'metadata' => $cell->metadata,
 
             'created_at' => $cell->created_at?->toISOString(),

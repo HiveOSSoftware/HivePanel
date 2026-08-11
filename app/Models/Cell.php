@@ -2,10 +2,10 @@
 
 namespace App\Models;
 
+use App\Enums\CellInstallStatus;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use App\Enums\CellInstallStatus;
 
 class Cell extends Model
 {
@@ -27,6 +27,16 @@ class Cell extends Model
         'installed_at',
     ];
 
+    protected $appends = [
+        'variables',
+        'comb_data',
+        'limits',
+        'feature_limits',
+        'docker',
+        'startup',
+        'additional_allocations',
+    ];
+
     protected function casts(): array
     {
         return [
@@ -34,6 +44,41 @@ class Cell extends Model
             'install_status' => CellInstallStatus::class,
             'installed_at' => 'datetime',
         ];
+    }
+
+    public function getVariablesAttribute(): array
+    {
+        return data_get($this->metadata ?? [], 'variables', []);
+    }
+
+    public function getCombDataAttribute(): array
+    {
+        return data_get($this->metadata ?? [], 'comb_data', []);
+    }
+
+    public function getLimitsAttribute(): array
+    {
+        return data_get($this->metadata ?? [], 'limits', []);
+    }
+
+    public function getFeatureLimitsAttribute(): array
+    {
+        return data_get($this->metadata ?? [], 'feature_limits', []);
+    }
+
+    public function getDockerAttribute(): array
+    {
+        return data_get($this->metadata ?? [], 'docker', []);
+    }
+
+    public function getStartupAttribute(): array
+    {
+        return data_get($this->metadata ?? [], 'startup', []);
+    }
+
+    public function getAdditionalAllocationsAttribute(): array
+    {
+        return data_get($this->metadata ?? [], 'additional_allocations', []);
     }
 
     public function scopeVisibleTo($query, User $user)

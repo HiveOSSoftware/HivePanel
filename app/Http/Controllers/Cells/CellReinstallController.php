@@ -216,6 +216,23 @@ class CellReinstallController extends CellBaseController
         ]);
     }
 
+    public function installationStatus(string $id)
+    {
+        $cell = $this->panelCellOrFail($id);
+
+        return response()->json([
+            'install_status' => $cell->install_status?->value
+                ?? (string) $cell->install_status,
+
+            'install_status_label' => $cell->install_status?->label()
+                ?? ucfirst((string) $cell->install_status),
+
+            'install_failure_reason' => $cell->install_failure_reason,
+
+            'installed_at' => $cell->installed_at?->toIso8601String(),
+        ]);
+    }
+
     private function workerCellIsRunning(
         array $workerCell,
     ): bool {
