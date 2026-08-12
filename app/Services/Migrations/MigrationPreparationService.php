@@ -49,7 +49,6 @@ class MigrationPreparationService
 
             foreach ($migration->servers as $server) {
                 $owner = $this->resolveOwner(
-                    $migration,
                     $server,
                     $ownerCache,
                     $createdUsers,
@@ -98,23 +97,10 @@ class MigrationPreparationService
     }
 
     private function resolveOwner(
-        PlatformMigration $migration,
         PlatformMigrationServer $server,
         array &$cache,
         array &$createdUsers,
     ): User {
-        if (! $server->transfer_owner) {
-            $owner = $server->destinationOwner;
-
-            if (! $owner) {
-                throw new RuntimeException(
-                    "A fallback destination owner is required for '{$server->name}' because its source owner is not being transferred."
-                );
-            }
-
-            return $owner;
-        }
-
         if ($server->owner_strategy !== 'create') {
             $owner = $server->destinationOwner;
 
@@ -155,35 +141,10 @@ class MigrationPreparationService
             return $existing;
         }
 
-        $preservePassword = (bool) (
-            $data['preserve_password']
-            ?? false
-        );
-
-        $sourceDatabaseUser = (array) data_get(
-            $migration->source_config,
-            'database_discovery.users.' . sha1($email),
-            [],
-        );
-
-        $sourceHash = $sourceDatabaseUser['password_hash']
-            ?? null;
-
-        $sourceHashCompatible = (bool) (
-            $sourceDatabaseUser['password_compatible']
-            ?? false
-        );
-
-        $password = $preservePassword
-            && filled($sourceHash)
-            && $sourceHashCompatible
-                ? $sourceHash
-                : Hash::make(Str::random(64));
-
         $user = User::create([
             'name' => $name,
             'email' => $email,
-            'password' => $password,
+            'password' => Hash::make(Str::random(64)),
         ]);
 
         $cache[$email] = $user;
@@ -192,9 +153,6 @@ class MigrationPreparationService
             'id' => $user->id,
             'name' => $user->name,
             'email' => $user->email,
-            'password_preserved' => $preservePassword
-                && filled($sourceHash)
-                && $sourceHashCompatible,
         ];
 
         return $user;
@@ -286,31 +244,86 @@ class MigrationPreparationService
         PlatformMigrationServer $server,
         array $data,
     ): array {
+        $externalId = trim(
+            (string) (
+                $data['external_id']
+                ?? $server->destination_comb
+                ?? ''
+            )
+        );
+
+        $image = $data['image']
+            ?? $data['docker_image']
+            ?? data_get(
+                $server->source_metadata,
+                'docker_image',
+            );
+
         return [
+            'id' => $externalId,
             'name' => $data['name']
-                ?? $server->source_egg_name,
-
+                ?? $server->source_egg_name
+                ?? $externalId,
             'game' => $data['game']
-                ?? $server->source_egg_name,
-
-            'docker_image' => $data['docker_image']
-                ?? data_get(
-                    $server->source_metadata,
-                    'docker_image',
-                ),
-
-            'startup' => $data['startup']
+                ?? $server->source_egg_name
+                ?? 'imported',
+            'tags' => array_values(
+                array_unique([
+                    'migration',
+                    'pterodactyl',
+                    ...((array) ($data['tags'] ?? [])),
+                ])
+            ),
+            'image' => $image,
+            'working_dir' => $data['working_dir']
+                ?? '/home/container',
+            'entrypoint' => array_values(
+                (array) (
+                    $data['entrypoint']
+                    ?? []
+                )
+            ),
+            'environment' => $this->normaliseEnvironment(
+                (array) (
+                    $data['environment']
+                    ?? data_get(
+                        $server->source_metadata,
+                        'environment',
+                        [],
+                    )
+                )
+            ),
+            'mounts' => array_values(
+                (array) (
+                    $data['mounts']
+                    ?? [
+                        [
+                            'source' => 'instance',
+                            'target' => '/home/container',
+                        ],
+                    ]
+                )
+            ),
+            'startup' => (string) (
+                $data['startup']
                 ?? data_get(
                     $server->source_metadata,
                     'startup',
-                ),
-
-            'environment' => $data['environment']
-                ?? data_get(
-                    $server->source_metadata,
-                    'environment',
-                    [],
-                ),
+                    ''
+                )
+            ),
+            'variables_schema' => array_values(
+                (array) (
+                    $data['variables_schema']
+                    ?? []
+                )
+            ),
+            'install' => array_values(
+                (array) (
+                    $data['install']
+                    ?? []
+                )
+            ),
 
             'migration' => [
                 'source' => 'pterodactyl',
@@ -332,6 +345,34 @@ class MigrationPreparationService
                 ),
             ],
         ];
+    }
+
+    private function normaliseEnvironment(
+        array $environment,
+    ): array {
+        return collect($environment)
+            ->mapWithKeys(function ($value, $key) {
+                if (is_bool($value)) {
+                    $value = $value
+                        ? 'true'
+                        : 'false';
+                } elseif ($value === null) {
+                    $value = '';
+                } elseif (is_scalar($value)) {
+                    $value = (string) $value;
+                } else {
+                    $value = json_encode(
+                        $value,
+                        JSON_UNESCAPED_SLASHES
+                        | JSON_UNESCAPED_UNICODE
+                    ) ?: '';
+                }
+
+                return [
+                    (string) $key => $value,
+                ];
+            })
+            ->all();
     }
 
     private function prepareAllocations(

@@ -4,13 +4,13 @@ namespace App\Http\Controllers\Admin;
 
 use App\Enums\AuditEvent;
 use App\Http\Controllers\Controller;
-use App\Jobs\InstallCellJob;
 use App\Models\Cell;
 use App\Models\Comb;
 use App\Models\Node;
 use App\Models\NodeAllocation;
 use App\Models\User;
 use App\Services\AuditLogger;
+use App\Services\Cells\CellProvisioningService;
 use App\Services\Cells\CellSyncService;
 use App\Services\Node\CellNodeClient;
 use Illuminate\Http\Request;
@@ -94,241 +94,60 @@ class AdminCellController extends Controller
         ]);
     }
 
-    public function store(Request $request, CellNodeClient $cells, AuditLogger $audit)
-    {
-        $data = $request->validate([
-            'node_id' => ['required', 'exists:nodes,id'],
-            'allocation_id' => ['required', 'exists:node_allocations,id'],
-            'additional_allocation_ids' => ['nullable', 'array'],
-            'additional_allocation_ids.*' => ['integer', 'exists:node_allocations,id'],
 
-            'name' => ['required', 'string', 'max:255'],
-            'owner_email' => ['nullable', 'email', 'max:255'],
-            'description' => ['nullable', 'string', 'max:1000'],
-            'start_on_completion' => ['boolean'],
+public function store(
+    Request $request,
+    CellProvisioningService $provisioning,
+) {
+    $data = $request->validate([
+        'node_id' => ['required', 'exists:nodes,id'],
+        'allocation_id' => ['required', 'exists:node_allocations,id'],
+        'additional_allocation_ids' => ['nullable', 'array'],
+        'additional_allocation_ids.*' => ['string', 'exists:node_allocations,id'],
 
-            'comb_id' => ['required', 'exists:combs,id'],
-            'version' => ['required', 'string', 'max:255'],
-            'skip_install_script' => ['boolean'],
+        'name' => ['required', 'string', 'max:255'],
+        'owner_email' => ['nullable', 'email', 'max:255'],
+        'description' => ['nullable', 'string', 'max:1000'],
+        'start_on_completion' => ['boolean'],
 
-            'memory_mb' => ['required', 'integer', 'min:0'],
-            'overhead_memory_mb' => ['required', 'integer', 'min:0'],
-            'swap_mb' => ['required', 'integer', 'min:-1'],
-            'disk_mb' => ['required', 'integer', 'min:0'],
-            'cpu_percent' => ['required', 'integer', 'min:0', 'max:1000'],
-            'cpu_pinning' => ['nullable', 'string', 'max:255'],
-            'io_weight' => ['required', 'integer', 'min:10', 'max:1000'],
-            'oom_killer' => ['boolean'],
-            'exclude_from_resource_calculation' => ['boolean'],
+        'comb_id' => ['required', 'exists:combs,id'],
+        'version' => ['required', 'string', 'max:255'],
+        'skip_install_script' => ['boolean'],
 
-            'database_limit' => ['nullable', 'integer', 'min:0'],
-            'allocation_limit' => ['nullable', 'integer', 'min:0'],
-            'backup_limit' => ['nullable', 'integer', 'min:0'],
-            'backup_storage_mb' => ['nullable', 'integer', 'min:0'],
+        'memory_mb' => ['required', 'integer', 'min:0'],
+        'overhead_memory_mb' => ['required', 'integer', 'min:0'],
+        'swap_mb' => ['required', 'integer', 'min:-1'],
+        'disk_mb' => ['required', 'integer', 'min:0'],
+        'cpu_percent' => ['required', 'integer', 'min:0', 'max:1000'],
+        'cpu_pinning' => ['nullable', 'string', 'max:255'],
+        'io_weight' => ['required', 'integer', 'min:10', 'max:1000'],
+        'oom_killer' => ['boolean'],
+        'exclude_from_resource_calculation' => ['boolean'],
 
-            'docker_image' => ['nullable', 'string', 'max:500'],
-            'startup_command' => ['nullable', 'string', 'max:1000'],
+        'database_limit' => ['nullable', 'integer', 'min:0'],
+        'allocation_limit' => ['nullable', 'integer', 'min:0'],
+        'backup_limit' => ['nullable', 'integer', 'min:0'],
+        'backup_storage_mb' => ['nullable', 'integer', 'min:0'],
 
-            'variables' => ['nullable', 'array'],
-        ]);
+        'docker_image' => ['nullable', 'string', 'max:500'],
+        'startup_command' => ['nullable', 'string', 'max:1000'],
 
-        return DB::transaction(function () use ($request, $data, $cells, $audit) {
-            $node = Node::query()
-                ->where('id', $data['node_id'])
-                ->where('is_active', true)
-                ->lockForUpdate()
-                ->firstOrFail();
+        'variables' => ['nullable', 'array'],
+    ]);
 
-            $allocation = NodeAllocation::query()
-                ->where('id', $data['allocation_id'])
-                ->where('node_id', $node->id)
-                ->whereNull('cell_id')
-                ->where('is_reserved', false)
-                ->lockForUpdate()
-                ->firstOrFail();
+    $owner = ! empty($data['owner_email'])
+        ? User::where('email', $data['owner_email'])->firstOrFail()
+        : $request->user();
 
-            $additionalIds = collect($data['additional_allocation_ids'] ?? [])
-                ->filter(fn ($id) => (int) $id !== (int) $allocation->id)
-                ->unique()
-                ->values();
+    $provisioning->provision(
+        $data,
+        $owner,
+    );
 
-            $additionalAllocations = NodeAllocation::query()
-                ->whereIn('id', $additionalIds)
-                ->where('node_id', $node->id)
-                ->whereNull('cell_id')
-                ->where('is_reserved', false)
-                ->lockForUpdate()
-                ->get();
-
-            abort_if(
-                $additionalAllocations->count() !== $additionalIds->count(),
-                422,
-                'One or more additional allocations are not available.'
-            );
-
-            $comb = Comb::findOrFail($data['comb_id']);
-
-            $variables = [
-                ...(array) ($data['variables'] ?? []),
-                'memory' => (string) $data['memory_mb'],
-                'version' => $data['version'],
-                'server_port' => (string) $allocation->port,
-                'server_ip' => $allocation->ip,
-            ];
-
-            $daemonCell = $cells->createCell($node, [
-                'name' => $data['name'],
-                'description' => $data['description'] ?? null,
-                'comb' => $comb->external_id,
-                'comb_data' => $comb->data,
-
-                'allocation' => [
-                    'ip' => $allocation->ip,
-                    'port' => $allocation->port,
-                    'alias' => $allocation->alias,
-                ],
-
-                'additional_allocations' => $additionalAllocations->map(fn ($extra) => [
-                    'ip' => $extra->ip,
-                    'port' => $extra->port,
-                    'alias' => $extra->alias,
-                ])->values()->all(),
-
-                'variables' => $variables,
-
-                'limits' => [
-                    'memory_mb' => $data['memory_mb'],
-                    'overhead_memory_mb' => $data['overhead_memory_mb'],
-                    'swap_mb' => $data['swap_mb'],
-                    'disk_mb' => $data['disk_mb'],
-                    'cpu_percent' => $data['cpu_percent'],
-                    'cpu_pinning' => $data['cpu_pinning'] ?? null,
-                    'io_weight' => $data['io_weight'],
-                    'oom_killer' => $data['oom_killer'],
-                ],
-
-                'feature_limits' => [
-                    'database_limit' => $data['database_limit'] ?? null,
-                    'allocation_limit' => $data['allocation_limit'] ?? null,
-                    'backup_limit' => $data['backup_limit'] ?? null,
-                    'backup_storage_mb' => $data['backup_storage_mb'] ?? null,
-                ],
-
-                'docker' => [
-                    'image' => $data['docker_image'] ?? null,
-                ],
-
-                'startup' => [
-                    'command' => $data['startup_command'] ?? null,
-                    'skip_install_script' => $data['skip_install_script'],
-                    'start_on_completion' => $data['start_on_completion'],
-                ],
-            ]);
-
-            $owner = ! empty($data['owner_email'])
-                ? User::where('email', $data['owner_email'])->firstOrFail()
-                : $request->user();
-
-            $cell = Cell::create([
-                'node_id' => $node->id,
-                'owner_id' => $owner->id,
-                'daemon_id' => $daemonCell['id'] ?? null,
-                'name' => $daemonCell['name'] ?? $data['name'],
-                'comb' => $daemonCell['comb'] ?? $comb->external_id,
-                'metadata' => [
-                    ...$daemonCell,
-
-                    'description' => $data['description'] ?? null,
-
-                    'comb_id' => $comb->id,
-                    'comb_data' => $comb->data,
-
-                    'allocation' => [
-                        'id' => $allocation->id,
-                        'ip' => $allocation->ip,
-                        'port' => $allocation->port,
-                        'alias' => $allocation->alias,
-                        'primary' => true,
-                    ],
-
-                    'additional_allocations' => $additionalAllocations->map(fn ($extra) => [
-                        'id' => $extra->id,
-                        'ip' => $extra->ip,
-                        'port' => $extra->port,
-                        'alias' => $extra->alias,
-                    ])->values()->all(),
-
-                    'limits' => [
-                        'memory_mb' => $data['memory_mb'],
-                        'overhead_memory_mb' => $data['overhead_memory_mb'],
-                        'swap_mb' => $data['swap_mb'],
-                        'disk_mb' => $data['disk_mb'],
-                        'cpu_percent' => $data['cpu_percent'],
-                        'cpu_pinning' => $data['cpu_pinning'] ?? null,
-                        'io_weight' => $data['io_weight'],
-                        'oom_killer' => $data['oom_killer'],
-                        'exclude_from_resource_calculation' => $data['exclude_from_resource_calculation'],
-                    ],
-
-                    'feature_limits' => [
-                        'database_limit' => $data['database_limit'] ?? null,
-                        'allocation_limit' => $data['allocation_limit'] ?? null,
-                        'backup_limit' => $data['backup_limit'] ?? null,
-                        'backup_storage_mb' => $data['backup_storage_mb'] ?? null,
-                    ],
-
-                    'docker' => [
-                        'image' => $data['docker_image'] ?? null,
-                    ],
-
-                    'startup' => [
-                        'command' => $data['startup_command'] ?? null,
-                        'skip_install_script' => $data['skip_install_script'],
-                        'start_on_completion' => $data['start_on_completion'],
-                    ],
-
-                    'variables' => $variables,
-                ],
-            ]);
-
-            $allocation->update([
-                'cell_id' => $cell->id,
-            ]);
-
-            $additionalAllocations->each->update([
-                'cell_id' => $cell->id,
-            ]);
-
-            $cell->forceFill([
-                'primary_allocation_id' => $allocation->id,
-            ])->save();
-
-            if (! $data['skip_install_script']) {
-                InstallCellJob::dispatch(
-                    $cell->id,
-                    (bool) $data['start_on_completion']
-                );
-            } elseif ($data['start_on_completion']) {
-                $cells->startCell($cell);
-            }
-
-            $audit->log(
-                AuditEvent::SERVER_CREATED,
-                $cell,
-                "Server \"{$cell->name}\" was created.",
-                [
-                    'node_id' => $node->id,
-                    'daemon_id' => $cell->daemon_id,
-                    'comb' => $cell->comb,
-                    'allocation_id' => $allocation->id,
-                    'allocation' => "{$allocation->ip}:{$allocation->port}",
-                ]
-            );
-
-            return redirect()->route('admin.cells.index');
-        });
-    }
-
+    return redirect()
+        ->route('admin.cells.index')
+        ->with('success', 'Cell created successfully.');
+}
     public function show(Cell $cell)
     {
         $cell->load([

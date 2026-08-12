@@ -229,6 +229,41 @@ function toggleDatabase(serverId: string, database: any) {
     ]
 }
 
+function combMatchLabel(egg: any) {
+    if (egg.match?.confidence === 'saved') {
+        return 'Saved mapping'
+    }
+
+    if (egg.match?.confidence === 'exact') {
+        return 'Exact match'
+    }
+
+    if (egg.match?.confidence === 'high') {
+        return 'High-confidence match'
+    }
+
+    if (egg.match?.confidence === 'low') {
+        return 'Needs review'
+    }
+
+    return 'No automatic match'
+}
+
+function combMatchClass(egg: any) {
+    if (
+        egg.match?.confidence === 'exact'
+        || egg.match?.confidence === 'high'
+    ) {
+        return 'border-status-success/30 bg-status-success/10 text-status-success'
+    }
+
+    if (egg.match?.confidence === 'saved') {
+        return 'border-hive/30 bg-hive/10 text-hive'
+    }
+
+    return 'border-status-warning/30 bg-status-warning/10 text-status-warning'
+}
+
 function submit() {
     form.patch(`/admin/migrations/${props.migration.id}/mapping`, {
         preserveScroll: true,
@@ -530,6 +565,19 @@ function submit() {
                                             {{ comb.game }} — {{ comb.name }}
                                         </option>
                                     </select>
+
+                                    <div class="mt-2 flex items-start gap-2">
+                                        <span
+                                            class="shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-black"
+                                            :class="combMatchClass(egg)"
+                                        >
+                                            {{ combMatchLabel(egg) }}
+                                        </span>
+
+                                        <p class="min-w-0 text-[11px] leading-5 text-zinc-600">
+                                            {{ egg.match?.reason || 'Choose the destination Comb manually.' }}
+                                        </p>
+                                    </div>
 
                                     <div
                                         v-if="form.comb_map[egg.key] === '__create__'"

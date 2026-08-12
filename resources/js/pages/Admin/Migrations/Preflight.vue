@@ -5,7 +5,9 @@ import {
     ArrowLeft,
     CircleAlert,
     CircleCheck,
+    Clipboard,
     Database,
+    Key,
     KeyRound,
     Network,
     Save,
@@ -31,6 +33,8 @@ const props = defineProps<{
 }>()
 
 const preparing = ref(false)
+const generatingKeyFor = ref<string | null>(null)
+const copiedCommandFor = ref<string | null>(null)
 
 const transferForm = useForm({
     nodes: Object.fromEntries(
@@ -41,7 +45,10 @@ const transferForm = useForm({
                 host: node.host,
                 port: node.port,
                 username: node.username,
+                auth_type: node.auth_type ?? 'private_key',
                 password: '',
+                private_key: '',
+                private_key_passphrase: '',
                 path_template: node.path_template,
             },
         ])
@@ -70,6 +77,75 @@ const startReady = computed(() =>
     && props.transferComplete
     && props.databaseTransferComplete
 )
+
+async function generateMigrationKey(node: any) {
+    if (generatingKeyFor.value) return
+
+    generatingKeyFor.value = node.source_node
+
+    try {
+        const response = await fetch(
+            `/admin/migrations/${props.migration.id}/transfer/generate-key`,
+            {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRF-TOKEN': document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content ?? '',
+                },
+                body: JSON.stringify({
+                    source_node: node.source_node,
+                }),
+            }
+        )
+
+        const payload = await response.json()
+
+        if (!response.ok) {
+            throw new Error(
+                payload.message
+                ?? 'Could not generate the migration SSH key.'
+            )
+        }
+
+        transferForm.nodes[node.source_node].auth_type = 'private_key'
+        transferForm.nodes[node.source_node].username = 'hivepanel-migration'
+
+        node.auth_type = 'private_key'
+        node.has_private_key = true
+        node.public_key = payload.public_key
+        node.setup_command = payload.setup_command
+    } catch (error: any) {
+        transferForm.setError(
+            'transfer',
+            error?.message
+            ?? 'Could not generate the migration SSH key.'
+        )
+    } finally {
+        generatingKeyFor.value = null
+    }
+}
+
+async function copySetupCommand(node: any) {
+    if (!node.setup_command) return
+
+    await navigator.clipboard.writeText(
+        node.setup_command
+    )
+
+    copiedCommandFor.value = node.source_node
+
+    window.setTimeout(() => {
+        if (
+            copiedCommandFor.value
+            === node.source_node
+        ) {
+            copiedCommandFor.value = null
+        }
+    }, 2000)
+}
 
 function saveTransferAccess() {
     transferForm.patch(
@@ -163,7 +239,7 @@ function actionClass(action: string) {
                                 </h1>
 
                                 <p class="mt-2 text-sm text-zinc-400">
-                                    Validate destination networking/resources and configure source-node transfer access before execution.
+                                    Validate destination networking/resources and configure direct access to the underlying Pterodactyl nodes before execution.
                                 </p>
                             </div>
 
@@ -210,11 +286,11 @@ function actionClass(action: string) {
                     <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
                         <div class="flex items-center gap-2">
                             <KeyRound class="size-5 text-hive" />
-                            <h2 class="text-lg font-black">Source Node Transfer Access</h2>
+                            <h2 class="text-lg font-black">Source Node File Access</h2>
                         </div>
 
                         <p class="mt-1 max-w-4xl text-sm text-zinc-500">
-                            Configure one SFTP/FTP login per Pterodactyl source node. The destination HivePanel Worker will connect directly to this source when each Cell is migrated. Credentials remain inside the migration's encrypted source configuration.
+                            Configure one SSH/SFTP or FTP account for each underlying Pterodactyl node. Do not use an individual server's Pterodactyl SFTP account. HivePanel uses this node-level account to read the selected servers' volume directories directly. The account must have read access to every selected server on this node, and the credentials remain inside the migration's encrypted source configuration.
                         </p>
 
                         <form
@@ -234,11 +310,11 @@ function actionClass(action: string) {
 
                                     <span
                                         class="rounded-full border px-2.5 py-1 text-xs font-black"
-                                        :class="node.has_password
+                                        :class="node.has_password || node.has_private_key
                                             ? 'border-status-success/30 bg-status-success/10 text-status-success'
                                             : 'border-status-warning/30 bg-status-warning/10 text-status-warning'"
                                     >
-                                        {{ node.has_password ? 'Password saved' : 'Credentials required' }}
+                                        {{ node.has_password || node.has_private_key ? 'Node access saved' : 'Node access required' }}
                                     </span>
                                 </div>
 
@@ -252,6 +328,17 @@ function actionClass(action: string) {
                                             <option value="sftp">SFTP</option>
                                             <option value="ftp">FTP</option>
                                             <option value="ftps">FTPS</option>
+                                        </select>
+                                    </div>
+
+                                    <div>
+                                        <label class="text-xs font-black text-zinc-500">Authentication</label>
+                                        <select
+                                            v-model="transferForm.nodes[node.source_node].auth_type"
+                                            class="mt-1 w-full rounded-button border border-zinc-800 bg-black/30 px-3 py-2.5 text-sm font-bold text-white outline-none focus:border-hive"
+                                        >
+                                            <option value="private_key">SSH Key</option>
+                                            <option value="password">Password</option>
                                         </select>
                                     </div>
 
@@ -281,7 +368,9 @@ function actionClass(action: string) {
                                         />
                                     </div>
 
-                                    <div>
+                                    <div
+                                        v-if="transferForm.nodes[node.source_node].auth_type === 'password'"
+                                    >
                                         <label class="text-xs font-black text-zinc-500">Password</label>
                                         <input
                                             v-model="transferForm.nodes[node.source_node].password"
@@ -292,19 +381,110 @@ function actionClass(action: string) {
                                         />
                                     </div>
 
+                                    <div
+                                        v-else
+                                        class="md:col-span-2 xl:col-span-2"
+                                    >
+                                        <label class="text-xs font-black text-zinc-500">SSH Private Key</label>
+
+                                        <textarea
+                                            v-model="transferForm.nodes[node.source_node].private_key"
+                                            rows="3"
+                                            class="mt-1 w-full resize-none rounded-button border border-zinc-800 bg-black/30 px-3 py-2.5 font-mono text-xs font-bold text-white outline-none focus:border-hive"
+                                            :placeholder="node.has_private_key ? 'Generated key saved — leave blank to keep it' : 'Paste an OpenSSH private key, or generate one below'"
+                                        ></textarea>
+                                    </div>
+
+                                    <div
+                                        v-if="transferForm.nodes[node.source_node].auth_type === 'private_key'"
+                                        class="md:col-span-2 xl:col-span-6 rounded-button border border-hive/20 bg-hive/5 p-4"
+                                    >
+                                        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                            <div>
+                                                <div class="flex items-center gap-2">
+                                                    <Key class="size-4 text-hive" />
+                                                    <span class="text-sm font-black text-white">
+                                                        Quick Source Node Setup
+                                                    </span>
+                                                </div>
+
+                                                <p class="mt-1 max-w-3xl text-xs leading-5 text-zinc-500">
+                                                    Generate a dedicated HivePanel migration key, then copy the command below and run it once on the underlying Pterodactyl node. It creates <code>hivepanel-migration</code>, installs the restricted SFTP key, reads Wings' configured <code>system.data</code> path, and grants read-only access to the real Pterodactyl volume directory. HivePanel detects and fills the volume template automatically when you save node access.
+                                                </p>
+                                            </div>
+
+                                            <button
+                                                type="button"
+                                                class="inline-flex shrink-0 items-center justify-center gap-2 rounded-button border border-hive bg-hive px-3 py-2 text-xs font-black text-black transition hover:bg-hive-light disabled:opacity-50"
+                                                :disabled="generatingKeyFor !== null"
+                                                @click="generateMigrationKey(node)"
+                                            >
+                                                <Key class="size-3.5" />
+                                                {{ generatingKeyFor === node.source_node
+                                                    ? 'Generating...'
+                                                    : node.has_private_key
+                                                        ? 'Regenerate Key'
+                                                        : 'Generate Migration Key' }}
+                                            </button>
+                                        </div>
+
+                                        <div
+                                            v-if="node.setup_command"
+                                            class="mt-4"
+                                        >
+                                            <div class="mb-2 flex items-center justify-between gap-3">
+                                                <span class="text-[10px] font-black uppercase tracking-wide text-zinc-600">
+                                                    Run on {{ node.source_node }}
+                                                </span>
+
+                                                <button
+                                                    type="button"
+                                                    class="inline-flex items-center gap-1.5 text-xs font-black text-hive transition hover:text-hive-light"
+                                                    @click="copySetupCommand(node)"
+                                                >
+                                                    <Clipboard class="size-3.5" />
+                                                    {{ copiedCommandFor === node.source_node ? 'Copied' : 'Copy Command' }}
+                                                </button>
+                                            </div>
+
+                                            <pre class="max-h-44 overflow-auto whitespace-pre-wrap break-all rounded-button border border-zinc-800 bg-black/40 p-3 font-mono text-[11px] leading-5 text-zinc-300">{{ node.setup_command }}</pre>
+
+                                            <p class="mt-2 text-xs leading-5 text-zinc-600">
+                                                The generated private key remains encrypted inside this migration. Only the public key is installed on the source node. Regenerating the key replaces the saved migration key.
+                                            </p>
+                                        </div>
+                                    </div>
+
                                     <div class="md:col-span-2 xl:col-span-6">
-                                        <label class="text-xs font-black text-zinc-500">Server Path Template</label>
+                                        <label class="text-xs font-black text-zinc-500">Pterodactyl Volume Path Template</label>
                                         <input
                                             v-model="transferForm.nodes[node.source_node].path_template"
                                             class="mt-1 w-full rounded-button border border-zinc-800 bg-black/30 px-3 py-2.5 font-mono text-sm font-bold text-white outline-none focus:border-hive"
                                             placeholder="/var/lib/pterodactyl/volumes/{uuid}"
                                         />
 
-                                        <p class="mt-1 text-xs text-zinc-600">
-                                            Use <code>{uuid}</code> where the Pterodactyl server UUID should be inserted.
-                                        </p>
+                                        <div class="mt-1 flex flex-wrap items-center gap-2">
+                                            <p class="text-xs text-zinc-600">
+                                                Path to server data on the underlying source node. Use <code>{uuid}</code> where the Pterodactyl server UUID should be inserted.
+                                            </p>
+
+                                            <span
+                                                v-if="node.path_detected"
+                                                class="inline-flex items-center gap-1 rounded-full border border-status-success/30 bg-status-success/10 px-2 py-0.5 text-[10px] font-black text-status-success"
+                                            >
+                                                <CircleCheck class="size-3" />
+                                                Detected from Wings config
+                                            </span>
+                                        </div>
                                     </div>
                                 </div>
+                            </div>
+
+                            <div
+                                v-if="transferForm.errors.transfer"
+                                class="rounded-button border border-status-danger/30 bg-status-danger/10 p-3 text-xs font-bold text-status-danger"
+                            >
+                                {{ transferForm.errors.transfer }}
                             </div>
 
                             <button
@@ -313,7 +493,7 @@ function actionClass(action: string) {
                                 :disabled="transferForm.processing"
                             >
                                 <Save class="size-4" />
-                                {{ transferForm.processing ? 'Saving...' : 'Save Transfer Access' }}
+                                {{ transferForm.processing ? 'Testing...' : 'Test & Save Node Access' }}
                             </button>
                         </form>
                     </section>
@@ -604,7 +784,7 @@ function actionClass(action: string) {
                                         </template>
 
                                         <template v-else-if="!transferComplete">
-                                            Save valid transfer access for every source Pterodactyl node before migration can be prepared.
+                                            Configure and verify file access for every source Pterodactyl node before this migration can be prepared.
                                         </template>
 
                                         <template v-else-if="!databaseTransferComplete">

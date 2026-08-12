@@ -143,7 +143,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('/{migration}/preflight', [AdminMigrationController::class, 'preflight'])->name('preflight');
             Route::post('/{migration}/prepare', [AdminMigrationController::class, 'prepare'])->name('prepare');
             Route::patch('/{migration}/transfer', [AdminMigrationController::class, 'updateTransferConfiguration'])->name('transfer.update');
+            Route::post('/{migration}/transfer/generate-key', [AdminMigrationController::class, 'generateTransferKey'])->name('transfer.generate-key');
             Route::patch('/{migration}/database-transfer', [AdminMigrationController::class, 'updateDatabaseTransferConfiguration'])->name('database-transfer.update');
+
+            Route::get('/{migration}/execution', [AdminMigrationController::class, 'execution'])->name('execution');
+            Route::post('/{migration}/execution/start', [AdminMigrationController::class, 'startExecution'])->name('execution.start');
 
             Route::delete('/{migration}', [AdminMigrationController::class, 'destroy'])->name('destroy');
         });

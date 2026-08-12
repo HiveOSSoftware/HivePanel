@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\Migrations\DiscoverPlatformMigration;
+use App\Jobs\Migrations\ExecutePlatformMigration;
 use App\Models\Comb;
 use App\Models\Node;
 use App\Models\PlatformMigration;
@@ -283,8 +284,13 @@ class AdminMigrationController extends Controller
                         && filled($server->destination_comb)
                     );
 
+                $automaticMatch = $this->suggestCombMatch(
+                    $name,
+                    $combs->all(),
+                );
+
                 $suggested = $existing?->destination_comb
-                    ?: $this->suggestCombExternalId($name, $combs->all());
+                    ?: $automaticMatch['external_id'];
 
                 $sourceServer = $migration->servers
                     ->first(fn (PlatformMigrationServer $server) =>
@@ -309,6 +315,13 @@ class AdminMigrationController extends Controller
                     'key' => $this->mappingKey($name),
                     'destination_external_id' => $suggested,
                     'matched' => filled($suggested),
+                    'match' => $existing
+                        ? [
+                            'confidence' => 'saved',
+                            'score' => null,
+                            'reason' => 'Using the previously saved mapping.',
+                        ]
+                        : $automaticMatch,
                     'create' => [
                         'name' => $name,
                         'game' => $name,
@@ -888,7 +901,22 @@ class AdminMigrationController extends Controller
                 'string',
                 'max:255',
             ],
+            'nodes.*.auth_type' => [
+                'required',
+                'string',
+                'in:password,private_key',
+            ],
             'nodes.*.password' => [
+                'nullable',
+                'string',
+                'max:1000',
+            ],
+            'nodes.*.private_key' => [
+                'nullable',
+                'string',
+                'max:20000',
+            ],
+            'nodes.*.private_key_passphrase' => [
                 'nullable',
                 'string',
                 'max:1000',
@@ -909,6 +937,53 @@ class AdminMigrationController extends Controller
             'success',
             'Source transfer access saved successfully.'
         );
+    }
+
+    public function generateTransferKey(
+        PlatformMigration $migration,
+        Request $request,
+        MigrationTransferConfigurationService $transfer,
+    ) {
+        abort_unless(
+            in_array(
+                $migration->status,
+                [
+                    'mapped',
+                    'preflight_ready',
+                    'preflight_blocked',
+                ],
+                true
+            ),
+            422,
+            'Complete mapping before generating source-node access.'
+        );
+
+        $data = $request->validate([
+            'source_node' => [
+                'required',
+                'string',
+                'max:255',
+            ],
+        ]);
+
+        try {
+            $result = $transfer->generateKey(
+                $migration,
+                $data['source_node'],
+            );
+        } catch (\Throwable $exception) {
+            report($exception);
+
+            return response()->json([
+                'message' => $exception->getMessage()
+                    ?: 'Could not generate the migration SSH key.',
+            ], 422);
+        }
+
+        return response()->json([
+            'message' => 'Migration SSH key generated.',
+            ...$result,
+        ]);
     }
 
     public function updateDatabaseTransferConfiguration(
@@ -1104,14 +1179,139 @@ class AdminMigrationController extends Controller
             ]);
         }
 
-        return back()->with(
-            'success',
-            "Prepared {$result['prepared_servers']} server(s), created "
-            . count($result['created_users'])
-            . ' user(s) and '
-            . count($result['created_combs'])
-            . ' Comb(s).'
+        return redirect()
+            ->route(
+                'admin.migrations.execution',
+                $migration,
+            )
+            ->with(
+                'success',
+                "Prepared {$result['prepared_servers']} server(s), created "
+                . count($result['created_users'])
+                . ' user(s) and '
+                . count($result['created_combs'])
+                . ' Comb(s).'
+            );
+    }
+
+    public function execution(
+        PlatformMigration $migration,
+    ) {
+        abort_unless(
+            in_array(
+                $migration->status,
+                [
+                    'execution_ready',
+                    'running',
+                    'database_pending',
+                    'completed',
+                    'completed_with_errors',
+                    'failed',
+                ],
+                true
+            ),
+            422,
+            'Prepare the migration before opening execution.'
         );
+
+        $migration->load([
+            'servers' => fn ($query) => $query
+                ->where('selected', true)
+                ->with([
+                    'destinationCell:id,name,daemon_id',
+                    'destinationNode:id,name,location',
+                    'destinationOwner:id,name,email',
+                ])
+                ->orderBy('source_node_name')
+                ->orderBy('name'),
+        ]);
+
+        return Inertia::render(
+            'Admin/Migrations/Execution',
+            [
+                'migration' => $this->migrationPayload(
+                    $migration,
+                ),
+                'servers' => $migration->servers
+                    ->map(fn (
+                        PlatformMigrationServer $server
+                    ) => [
+                        ...$this->migrationServerPayload(
+                            $server,
+                        ),
+
+                        'destination_cell' =>
+                            $server->destinationCell
+                                ? [
+                                    'id' => $server
+                                        ->destinationCell
+                                        ->id,
+                                    'name' => $server
+                                        ->destinationCell
+                                        ->name,
+                                    'daemon_id' => $server
+                                        ->destinationCell
+                                        ->daemon_id,
+                                ]
+                                : null,
+
+                        'destination_node' =>
+                            $server->destinationNode
+                                ? [
+                                    'id' => $server
+                                        ->destinationNode
+                                        ->id,
+                                    'name' => $server
+                                        ->destinationNode
+                                        ->name,
+                                    'location' => $server
+                                        ->destinationNode
+                                        ->location,
+                                ]
+                                : null,
+
+                        'destination_owner' =>
+                            $server->destinationOwner
+                                ? [
+                                    'id' => $server
+                                        ->destinationOwner
+                                        ->id,
+                                    'name' => $server
+                                        ->destinationOwner
+                                        ->name,
+                                    'email' => $server
+                                        ->destinationOwner
+                                        ->email,
+                                ]
+                                : null,
+                    ])
+                    ->values(),
+            ],
+        );
+    }
+
+    public function startExecution(
+        PlatformMigration $migration,
+    ) {
+        abort_unless(
+            $migration->status === 'execution_ready',
+            422,
+            'This migration is not ready to start.'
+        );
+
+        ExecutePlatformMigration::dispatch(
+            $migration->id,
+        );
+
+        return redirect()
+            ->route(
+                'admin.migrations.execution',
+                $migration,
+            )
+            ->with(
+                'success',
+                'Migration execution has been queued.'
+            );
     }
 
     public function updateSource(
@@ -1261,6 +1461,7 @@ class AdminMigrationController extends Controller
             'selected' => (bool) $server->selected,
             'destination_node_id' => $server->destination_node_id,
             'destination_owner_id' => $server->destination_owner_id,
+            'destination_cell_id' => $server->destination_cell_id,
             'owner_strategy' => $server->owner_strategy,
             'owner_create_data' => $server->owner_create_data ?? [],
             'transfer_owner' => (bool) $server->transfer_owner,
@@ -1282,50 +1483,475 @@ class AdminMigrationController extends Controller
         string $eggName,
         array $combs,
     ): ?string {
-        $needle = $this->normaliseMappingName($eggName);
+        $match = $this->suggestCombMatch(
+            $eggName,
+            $combs,
+        );
 
-        $exact = collect($combs)->first(function (array $comb) use ($needle) {
-            return in_array(
-                $needle,
-                [
-                    $this->normaliseMappingName((string) ($comb['name'] ?? '')),
-                    $this->normaliseMappingName((string) ($comb['external_id'] ?? '')),
-                ],
-                true
-            );
-        });
-
-        if ($exact) {
-            return $exact['external_id'];
-        }
-
-        $contains = collect($combs)->first(function (array $comb) use ($needle) {
-            $values = [
-                $this->normaliseMappingName((string) ($comb['name'] ?? '')),
-                $this->normaliseMappingName((string) ($comb['game'] ?? '')),
-                $this->normaliseMappingName((string) ($comb['external_id'] ?? '')),
-            ];
-
-            foreach ($values as $value) {
-                if (
-                    $value !== ''
-                    && (
-                        str_contains($value, $needle)
-                        || str_contains($needle, $value)
-                    )
-                ) {
-                    return true;
-                }
-            }
-
-            return false;
-        });
-
-        return $contains['external_id'] ?? null;
+        return $match['external_id'] ?? null;
     }
 
-    private function normaliseMappingName(string $value): string
-    {
+    private function suggestCombMatch(
+        string $eggName,
+        array $combs,
+    ): array {
+        $source = $this->combMatchProfile(
+            $eggName,
+        );
+
+        $ranked = collect($combs)
+            ->map(function (array $comb) use ($source) {
+                $score = $this->scoreCombMatch(
+                    $source,
+                    $comb,
+                );
+
+                return [
+                    'external_id' => $comb[
+                        'external_id'
+                    ] ?? null,
+                    'score' => $score['score'],
+                    'reason' => $score['reason'],
+                    'comb' => $comb,
+                ];
+            })
+            ->filter(
+                fn (array $match) =>
+                    filled($match['external_id'])
+                    && $match['score'] > 0
+            )
+            ->sortByDesc('score')
+            ->values();
+
+        $best = $ranked->first();
+
+        if (! $best) {
+            return [
+                'external_id' => null,
+                'confidence' => 'none',
+                'score' => 0,
+                'reason' => 'No suitable Comb match found.',
+            ];
+        }
+
+        $secondScore = (int) (
+            $ranked->get(1)['score']
+            ?? 0
+        );
+
+        $bestScore = (int) $best['score'];
+
+        if (
+            $bestScore < 80
+            || (
+                $secondScore >= 80
+                && $bestScore - $secondScore < 15
+            )
+        ) {
+            return [
+                'external_id' => null,
+                'confidence' => 'low',
+                'score' => $bestScore,
+                'reason' => $secondScore >= 80
+                    ? 'Multiple Combs are too similar to choose safely.'
+                    : 'No high-confidence Comb match was found.',
+            ];
+        }
+
+        return [
+            'external_id' => $best[
+                'external_id'
+            ],
+            'confidence' => $bestScore >= 100
+                ? 'exact'
+                : 'high',
+            'score' => $bestScore,
+            'reason' => $best['reason'],
+        ];
+    }
+
+    private function scoreCombMatch(
+        array $source,
+        array $comb,
+    ): array {
+        $name = $this->combMatchProfile(
+            (string) (
+                $comb['name']
+                ?? ''
+            )
+        );
+
+        $externalId = $this->combMatchProfile(
+            (string) (
+                $comb['external_id']
+                ?? ''
+            )
+        );
+
+        $game = $this->combMatchProfile(
+            (string) (
+                $comb['game']
+                ?? ''
+            )
+        );
+
+        if (
+            $source['normalised'] !== ''
+            && in_array(
+                $source['normalised'],
+                [
+                    $name['normalised'],
+                    $externalId['normalised'],
+                ],
+                true
+            )
+        ) {
+            return [
+                'score' => 120,
+                'reason' => 'Exact Egg/Comb name match.',
+            ];
+        }
+
+        if (
+            filled($source['type'])
+            && in_array(
+                $source['type'],
+                [
+                    $name['type'],
+                    $externalId['type'],
+                ],
+                true
+            )
+        ) {
+            return [
+                'score' => 110,
+                'reason' => "Matched server type: {$source['type']}.",
+            ];
+        }
+
+        if (
+            filled($source['type'])
+            && filled($name['type'])
+            && $source['type'] !== $name['type']
+        ) {
+            return [
+                'score' => 0,
+                'reason' => 'Server types conflict.',
+            ];
+        }
+
+        $score = 0;
+        $reasons = [];
+
+        $nameOverlap = $this->meaningfulTokenOverlap(
+            $source['tokens'],
+            $name['tokens'],
+        );
+
+        $externalOverlap =
+            $this->meaningfulTokenOverlap(
+                $source['tokens'],
+                $externalId['tokens'],
+            );
+
+        $gameOverlap = $this->meaningfulTokenOverlap(
+            $source['tokens'],
+            $game['tokens'],
+        );
+
+        $strongOverlap = max(
+            $nameOverlap,
+            $externalOverlap,
+        );
+
+        if ($strongOverlap >= 1.0) {
+            $score += 95;
+            $reasons[] = 'All meaningful Egg tokens match the Comb.';
+        } elseif ($strongOverlap >= 0.75) {
+            $score += 85;
+            $reasons[] = 'Most meaningful Egg tokens match the Comb.';
+        } elseif ($strongOverlap >= 0.5) {
+            $score += 65;
+            $reasons[] = 'Some meaningful Egg tokens match the Comb.';
+        }
+
+        if (
+            $source['family'] !== null
+            && in_array(
+                $source['family'],
+                [
+                    $name['family'],
+                    $externalId['family'],
+                    $game['family'],
+                ],
+                true
+            )
+        ) {
+            $score += 15;
+            $reasons[] = "Matched game family: {$source['family']}.";
+        }
+
+        if (
+            $gameOverlap >= 1.0
+            && count($source['tokens']) > 0
+        ) {
+            $score += 10;
+            $reasons[] = 'Game name also matches.';
+        }
+
+        return [
+            'score' => $score,
+            'reason' => $reasons !== []
+                ? implode(' ', $reasons)
+                : 'No meaningful match.',
+        ];
+    }
+
+    private function combMatchProfile(
+        string $value,
+    ): array {
+        $normalised = $this->normaliseMappingName(
+            $value,
+        );
+
+        $words = Str::of($value)
+            ->lower()
+            ->replaceMatches('/[^a-z0-9]+/', ' ')
+            ->trim()
+            ->explode(' ')
+            ->filter()
+            ->values()
+            ->all();
+
+        $type = $this->detectCombType(
+            $normalised,
+            $words,
+        );
+
+        $family = $this->detectCombFamily(
+            $normalised,
+            $words,
+            $type,
+        );
+
+        $ignored = [
+            'minecraft',
+            'server',
+            'generic',
+            'java',
+            'edition',
+            'pterodactyl',
+            'egg',
+        ];
+
+        $tokens = collect($words)
+            ->reject(
+                fn (string $word) =>
+                    in_array(
+                        $word,
+                        $ignored,
+                        true
+                    )
+            )
+            ->map(
+                fn (string $word) =>
+                    $this->normaliseCombAlias(
+                        $word
+                    )
+            )
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if (
+            $type !== null
+            && ! in_array(
+                $type,
+                $tokens,
+                true
+            )
+        ) {
+            $tokens[] = $type;
+        }
+
+        return [
+            'normalised' => $normalised,
+            'tokens' => $tokens,
+            'type' => $type,
+            'family' => $family,
+        ];
+    }
+
+    private function detectCombType(
+        string $normalised,
+        array $words,
+    ): ?string {
+        $checks = [
+            'bungeecord' => [
+                'bungeecord',
+                'bungee',
+                'waterfall',
+            ],
+            'velocity' => [
+                'velocity',
+            ],
+            'paper' => [
+                'paper',
+            ],
+            'purpur' => [
+                'purpur',
+            ],
+            'spigot' => [
+                'spigot',
+            ],
+            'forge' => [
+                'forge',
+            ],
+            'neoforge' => [
+                'neoforge',
+            ],
+            'fabric' => [
+                'fabric',
+            ],
+            'quilt' => [
+                'quilt',
+            ],
+            'vanilla' => [
+                'vanilla',
+            ],
+            'bedrock' => [
+                'bedrock',
+            ],
+            'geyser' => [
+                'geyser',
+            ],
+            'palworld' => [
+                'palworld',
+            ],
+            'nodejs' => [
+                'nodejs',
+                'node',
+            ],
+        ];
+
+        foreach (
+            $checks as $type => $aliases
+        ) {
+            foreach ($aliases as $alias) {
+                if (
+                    $normalised
+                    === $this->normaliseMappingName(
+                        $alias
+                    )
+                    || str_contains(
+                        $normalised,
+                        $this->normaliseMappingName(
+                            $alias
+                        )
+                    )
+                    || in_array(
+                        $alias,
+                        $words,
+                        true
+                    )
+                ) {
+                    return $type;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function detectCombFamily(
+        string $normalised,
+        array $words,
+        ?string $type,
+    ): ?string {
+        if (
+            in_array(
+                $type,
+                [
+                    'bungeecord',
+                    'velocity',
+                    'paper',
+                    'purpur',
+                    'spigot',
+                    'forge',
+                    'neoforge',
+                    'fabric',
+                    'quilt',
+                    'vanilla',
+                    'bedrock',
+                    'geyser',
+                ],
+                true
+            )
+            || str_contains(
+                $normalised,
+                'minecraft'
+            )
+            || in_array(
+                'minecraft',
+                $words,
+                true
+            )
+        ) {
+            return 'minecraft';
+        }
+
+        if ($type === 'palworld') {
+            return 'palworld';
+        }
+
+        if ($type === 'nodejs') {
+            return 'nodejs';
+        }
+
+        return null;
+    }
+
+    private function normaliseCombAlias(
+        string $value,
+    ): string {
+        $value = $this->normaliseMappingName(
+            $value,
+        );
+
+        return match ($value) {
+            'bungee',
+            'waterfall' => 'bungeecord',
+
+            'node',
+            'nodejs' => 'nodejs',
+
+            default => $value,
+        };
+    }
+
+    private function meaningfulTokenOverlap(
+        array $sourceTokens,
+        array $candidateTokens,
+    ): float {
+        if ($sourceTokens === []) {
+            return 0.0;
+        }
+
+        $matches = count(
+            array_intersect(
+                $sourceTokens,
+                $candidateTokens,
+            )
+        );
+
+        return $matches
+            / count($sourceTokens);
+    }
+
+    private function normaliseMappingName(
+        string $value,
+    ): string {
         return Str::of($value)
             ->lower()
             ->replaceMatches('/[^a-z0-9]+/', '')
