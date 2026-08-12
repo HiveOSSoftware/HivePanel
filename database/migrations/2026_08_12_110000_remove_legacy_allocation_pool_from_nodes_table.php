@@ -9,11 +9,15 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('nodes', function (Blueprint $table) {
-            $table->dropColumn([
-                'allocation_ips',
-                'allocation_port_start',
-                'allocation_port_end',
-            ]);
+            if (Schema::hasColumn('nodes', 'allocation_ips')) {
+                $table->dropColumn('allocation_ips');
+            }
+            if (Schema::hasColumn('nodes', 'allocation_port_start')) {
+                $table->dropColumn('allocation_port_start');
+            }
+            if (Schema::hasColumn('nodes', 'allocation_port_end')) {
+                $table->dropColumn('allocation_port_end');
+            }
         });
     }
 

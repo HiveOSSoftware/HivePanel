@@ -372,6 +372,11 @@ const adminNav: SidebarNavEntry[] = [
                 icon: Boxes,
             },
             {
+                title: 'Migrations',
+                href: '/admin/migrations',
+                icon: Rocket,
+            },
+            {
                 title: 'Settings',
                 href: '/admin/settings',
                 icon: Settings,

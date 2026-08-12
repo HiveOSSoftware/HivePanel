@@ -15,6 +15,7 @@ use App\Http\Controllers\Admin\AdminNodeAllocationController;
 // Combs
 use App\Http\Controllers\Admin\AdminCombController;
 use App\Http\Controllers\Admin\AdminCombImportController;
+use App\Http\Controllers\Admin\AdminMigrationController;
 // Settings
 use App\Http\Controllers\Admin\AdminSettingsController;
 // Users
@@ -120,6 +121,31 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::post('/mail/test', [AdminSettingsController::class, 'testMail'])->name('mail.test');
             Route::patch('/captcha', [AdminSettingsController::class, 'updateCaptcha'])->name('captcha.update');
             Route::patch('/oauth', [AdminSettingsController::class, 'updateOAuth'])->name('oauth.update');
+        });
+
+        Route::prefix('migrations')->name('migrations.')->group(function () {
+            Route::get('/', [AdminMigrationController::class, 'index'])->name('index');
+            Route::get('/create', [AdminMigrationController::class, 'create'])->name('create');
+            Route::post('/', [AdminMigrationController::class, 'store'])->name('store');
+
+            Route::get('/{migration}', [AdminMigrationController::class, 'show'])->name('show');
+            Route::get('/{migration}/status', [AdminMigrationController::class, 'status'])->name('status');
+
+            Route::post('/{migration}/discover', [AdminMigrationController::class, 'discover'])->name('discover');
+            Route::patch('/{migration}/source', [AdminMigrationController::class, 'updateSource'])->name('source.update');
+            Route::patch('/{migration}/database-source', [AdminMigrationController::class, 'updateDatabaseSource'])->name('database-source.update');
+
+            Route::get('/{migration}/mapping', [AdminMigrationController::class, 'mapping'])->name('mapping');
+            Route::patch('/{migration}/mapping', [AdminMigrationController::class, 'updateMapping'])->name('mapping.update');
+
+            Route::get('/{migration}/review', [AdminMigrationController::class, 'review'])->name('review');
+
+            Route::get('/{migration}/preflight', [AdminMigrationController::class, 'preflight'])->name('preflight');
+            Route::post('/{migration}/prepare', [AdminMigrationController::class, 'prepare'])->name('prepare');
+            Route::patch('/{migration}/transfer', [AdminMigrationController::class, 'updateTransferConfiguration'])->name('transfer.update');
+            Route::patch('/{migration}/database-transfer', [AdminMigrationController::class, 'updateDatabaseTransferConfiguration'])->name('database-transfer.update');
+
+            Route::delete('/{migration}', [AdminMigrationController::class, 'destroy'])->name('destroy');
         });
 
         // Users
