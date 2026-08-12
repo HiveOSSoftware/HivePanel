@@ -13,9 +13,11 @@ class CellSettingsController extends CellBaseController
     public function index(string $id, CellNodeClient $cells)
     {
         $cell = $this->panelCellOrFail($id);
+
         if ($response = $this->installationPageIfNeeded($cell)) {
             return $response;
         }
+
         $workerCell = $this->getCellOrFail($cell, $cells);
 
         return Inertia::render('Cells/Settings', [
@@ -26,6 +28,7 @@ class CellSettingsController extends CellBaseController
     public function update(string $id, Request $request, CellNodeClient $cells, AuditLogger $audit)
     {
         $cell = $this->panelCellOrFail($id);
+
         if ($response = $this->installationPageIfNeeded($cell)) {
             return $response;
         }
@@ -41,12 +44,21 @@ class CellSettingsController extends CellBaseController
 
         $result = $cells->updateCellSettings($cell, $data);
 
+        if ($cell->name !== $data['name']) {
+            $cell->forceFill([
+                'name' => $data['name'],
+            ])->save();
+        }
+
+        $cell->invalidateWorkerSync();
+
         $audit->log(
             AuditEvent::SETTINGS_UPDATED,
             $cell,
             'Server settings were updated.',
             [
                 'fields' => array_keys($data),
+                'worker_sync_invalidated' => true,
             ]
         );
 
@@ -56,6 +68,7 @@ class CellSettingsController extends CellBaseController
     public function utility(string $id, string $utility, CellNodeClient $cells, AuditLogger $audit)
     {
         $cell = $this->panelCellOrFail($id);
+
         if ($response = $this->installationPageIfNeeded($cell)) {
             return $response;
         }

@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Enums\CellInstallStatus;
 use App\Models\Cell;
+use App\Services\Cells\CellSyncService;
 use App\Services\Node\CellNodeClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -24,29 +25,32 @@ class InstallCellJob implements ShouldQueue
     ) {
     }
 
-    public function handle(CellNodeClient $cells): void
+    public function handle(CellNodeClient $cells, CellSyncService $sync): void
     {
         $cell = Cell::query()
-            ->with('node')
+            ->with([
+                'node',
+                'allocation',
+            ])
             ->findOrFail($this->cellId);
 
         try {
             if (! $cell->daemon_id) {
-                throw new RuntimeException(
-                    'The cell does not have a daemon ID.',
-                );
+                throw new RuntimeException('The cell does not have a daemon ID.');
             }
 
             if (! $cell->node) {
-                throw new RuntimeException(
-                    'The cell is not assigned to a valid node.',
-                );
+                throw new RuntimeException('The cell is not assigned to a valid node.');
             }
 
             $cell->forceFill([
                 'install_status' => CellInstallStatus::INSTALLING,
                 'install_failure_reason' => null,
                 'installed_at' => null,
+                'worker_sync_status' => null,
+                'worker_sync_message' => null,
+                'worker_sync_differences' => null,
+                'worker_sync_checked_at' => null,
             ])->save();
 
             $cells->installCell($cell);
@@ -55,13 +59,21 @@ class InstallCellJob implements ShouldQueue
                 'install_status' => CellInstallStatus::INSTALLED,
                 'install_failure_reason' => null,
                 'installed_at' => now(),
+                'worker_recovery_required' => false,
             ])->save();
+
+            try {
+                $sync->inspect($cell->fresh([
+                    'node',
+                    'allocation',
+                ]));
+            } catch (Throwable $exception) {
+                report($exception);
+            }
         } catch (Throwable $exception) {
             $cell->forceFill([
                 'install_status' => CellInstallStatus::FAILED,
-                'install_failure_reason' => $this->failureMessage(
-                    $exception,
-                ),
+                'install_failure_reason' => $this->failureMessage($exception),
                 'installed_at' => null,
             ])->save();
 

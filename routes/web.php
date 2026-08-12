@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Admin\AdminDashboardController;
 // Cells
 use App\Http\Controllers\Admin\AdminCellController;
+use App\Http\Controllers\Admin\AdminCellReinstallController;
 use App\Http\Controllers\Admin\AdminCellSyncController;
 // Nodes
 use App\Http\Controllers\Admin\AdminNodeController;
@@ -65,6 +66,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::delete('{node}', [AdminNodeController::class, 'destroy'])->name('destroy');
             Route::get('{node}/stats-json', [AdminNodeController::class, 'statsJson'])->name('stats-json');
             Route::get('{node}/settings', [AdminNodeController::class, 'settings'])->name('settings');
+            Route::get('{node}/cells', [AdminNodeController::class, 'cells'])->name('cells');
             Route::patch('{node}/settings', [AdminNodeController::class, 'updateSettings'])->name('settings.update');
             Route::get('{node}/configuration', [AdminNodeController::class, 'configuration'])->name('configuration');
             Route::post('{node}/registration-token', [AdminNodeController::class, 'generateRegistrationToken'])->name('registration-token');
@@ -90,6 +92,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('{cell}/sync', [AdminCellSyncController::class, 'show'])->name('sync.show');
             Route::post('{cell}/sync', [AdminCellSyncController::class, 'repair'])->name('sync.repair');
             Route::post('{cell}/sync/recreate', [AdminCellSyncController::class, 'recreate'])->name('sync.recreate');
+
+            Route::post('{cell}/reinstall', [AdminCellReinstallController::class, 'store'])->name('reinstall');
 
             Route::get('{cell}', [AdminCellController::class, 'show'])->name('show');
         });

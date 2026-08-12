@@ -11,10 +11,12 @@ use App\Models\Node;
 use App\Models\NodeAllocation;
 use App\Models\User;
 use App\Services\AuditLogger;
+use App\Services\Cells\CellSyncService;
 use App\Services\Node\CellNodeClient;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
+use Throwable;
 
 class AdminCellController extends Controller
 {
@@ -26,6 +28,7 @@ class AdminCellController extends Controller
                     'owner:id,name,email',
                     'node:id,name,location',
                     'allocation:id,cell_id,ip,port,alias',
+                    'allocations:id,cell_id,ip,port,alias',
                 ])
                 ->latest()
                 ->get()
@@ -296,6 +299,10 @@ class AdminCellController extends Controller
                 'cell_id' => $cell->id,
             ]);
 
+            $cell->forceFill([
+                'primary_allocation_id' => $allocation->id,
+            ])->save();
+
             if (! $data['skip_install_script']) {
                 InstallCellJob::dispatch(
                     $cell->id,
@@ -328,6 +335,7 @@ class AdminCellController extends Controller
             'owner:id,name,email',
             'node:id,name,location,public_fqdn',
             'allocation:id,cell_id,ip,port,alias,is_reserved',
+            'allocations:id,cell_id,ip,port,alias,is_reserved',
         ]);
 
         return Inertia::render('Admin/Cells/Show', [
@@ -335,63 +343,362 @@ class AdminCellController extends Controller
         ]);
     }
 
-    public function edit(Cell $cell)
+    public function edit(Cell $cell, CellNodeClient $cells)
     {
         $cell->load([
             'owner:id,name,email',
             'node:id,name,location',
-            'allocation:id,cell_id,ip,port,alias',
+            'allocation:id,cell_id,node_id,ip,port,alias,is_reserved',
+            'allocations:id,cell_id,node_id,ip,port,alias,is_reserved',
         ]);
+
+        $editState = [
+            'status' => 'ready',
+            'editable' => true,
+            'message' => 'The Cell is offline and its definition can be updated.',
+        ];
+
+        if (! $cell->node) {
+            $editState = [
+                'status' => 'error',
+                'editable' => false,
+                'message' => 'This Cell is not assigned to a node.',
+            ];
+        } elseif (! $cell->daemon_id) {
+            $editState = [
+                'status' => 'error',
+                'editable' => false,
+                'message' => 'This Cell does not have a daemon ID.',
+            ];
+        } else {
+            try {
+                $worker = $cells->cellForSync($cell);
+
+                if (! $worker['reachable']) {
+                    $editState = [
+                        'status' => 'unreachable',
+                        'editable' => false,
+                        'message' => 'The assigned Worker is currently unreachable.',
+                    ];
+                } elseif (! $worker['exists']) {
+                    $editState = [
+                        'status' => 'missing',
+                        'editable' => false,
+                        'message' => 'This Cell is missing from the assigned Worker.',
+                    ];
+                } elseif ($this->workerCellIsRunning($worker['cell'] ?? [])) {
+                    $editState = [
+                        'status' => 'running',
+                        'editable' => false,
+                        'message' => 'Stop the Cell before changing its name, resource limits or allocations.',
+                    ];
+                }
+            } catch (Throwable $exception) {
+                report($exception);
+
+                $editState = [
+                    'status' => 'error',
+                    'editable' => false,
+                    'message' => $exception->getMessage()
+                        ?: 'The Worker state could not be determined.',
+                ];
+            }
+        }
 
         return Inertia::render('Admin/Cells/Edit', [
             'cell' => $this->cellPayload($cell),
+            'editState' => $editState,
+            'allocations' => $cell->node
+                ? $cell->node->allocations()
+                    ->where('is_reserved', false)
+                    ->where(function ($query) use ($cell) {
+                        $query->whereNull('cell_id')
+                            ->orWhere('cell_id', $cell->id);
+                    })
+                    ->orderBy('ip')
+                    ->orderBy('port')
+                    ->get()
+                    ->map(fn (NodeAllocation $allocation) => [
+                        'id' => $allocation->id,
+                        'ip' => $allocation->ip,
+                        'port' => $allocation->port,
+                        'alias' => $allocation->alias,
+                        'assigned_to_cell' => (string) $allocation->cell_id === (string) $cell->id,
+                        'primary' => (string) $allocation->id === (string) $cell->primary_allocation_id,
+                        'label' => "{$allocation->ip}:{$allocation->port}" . ($allocation->alias ? " ({$allocation->alias})" : ''),
+                    ])
+                    ->values()
+                : [],
         ]);
     }
 
-    public function update(Request $request, Cell $cell, AuditLogger $audit)
+    public function update(Request $request, Cell $cell, CellNodeClient $cells, CellSyncService $sync, AuditLogger $audit)
     {
+        $cell->loadMissing([
+            'node',
+            'allocation',
+            'allocations',
+        ]);
+
+        abort_unless($cell->node, 422, 'This Cell is not assigned to a node.');
+        abort_unless($cell->daemon_id, 422, 'This Cell does not have a daemon ID.');
+
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
+            'memory_mb' => ['required', 'integer', 'min:0'],
+            'cpu_percent' => ['required', 'integer', 'min:0', 'max:1000'],
+            'disk_mb' => ['required', 'integer', 'min:0'],
+            'allocation_id' => ['required', 'exists:node_allocations,id'],
+            'additional_allocation_ids' => ['nullable', 'array'],
+            'additional_allocation_ids.*' => ['string', 'exists:node_allocations,id'],
         ]);
 
-        $nameChanged = $cell->name !== $data['name'];
+        $worker = $cells->cellForSync($cell);
 
-        $cell->update([
-            'name' => $data['name'],
-            ...($nameChanged ? [
-                'worker_sync_status' => null,
-                'worker_sync_message' => null,
-                'worker_sync_differences' => null,
-                'worker_sync_checked_at' => null,
-            ] : []),
-        ]);
+        if (! $worker['reachable']) {
+            return back()->withErrors([
+                'worker' => 'The assigned Worker is currently unreachable.',
+            ]);
+        }
 
-        $audit->log(
-            AuditEvent::SERVER_UPDATED,
-            $cell,
-            "Server \"{$cell->name}\" was updated.",
-            [
-                'cell_id' => $cell->id,
-                'worker_sync_invalidated' => $nameChanged,
-            ]
-        );
+        if (! $worker['exists']) {
+            return back()->withErrors([
+                'worker' => 'This Cell is missing from the assigned Worker. Recover the Worker Cell before editing its definition.',
+            ]);
+        }
 
-        return redirect()->route('admin.cells.show', $cell);
+        if ($this->workerCellIsRunning($worker['cell'] ?? [])) {
+            return back()->withErrors([
+                'worker' => 'Stop the Cell before changing its name, resource limits or allocations.',
+            ]);
+        }
+
+        $additionalIds = collect($data['additional_allocation_ids'] ?? [])
+            ->map(fn ($id) => (string) $id)
+            ->filter(fn ($id) => $id !== (string) $data['allocation_id'])
+            ->unique()
+            ->values();
+
+        $oldMetadata = $cell->metadata ?? [];
+        $oldAllocationIds = $cell->allocations
+            ->pluck('id')
+            ->map(fn ($id) => (string) $id)
+            ->sort()
+            ->values()
+            ->all();
+
+        $old = [
+            'name' => $cell->name,
+            'memory_mb' => (int) data_get($oldMetadata, 'limits.memory_mb', 1024),
+            'cpu_percent' => (int) data_get($oldMetadata, 'limits.cpu_percent', 100),
+            'disk_mb' => (int) data_get($oldMetadata, 'limits.disk_mb', 0),
+            'primary_allocation_id' => (string) $cell->primary_allocation_id,
+            'allocation_ids' => $oldAllocationIds,
+        ];
+
+        try {
+            DB::transaction(function () use ($cell, $data, $additionalIds, $oldMetadata): void {
+                $requestedIds = collect([
+                    (string) $data['allocation_id'],
+                    ...$additionalIds->all(),
+                ])->unique()->values();
+
+                $requestedAllocations = NodeAllocation::query()
+                    ->whereIn('id', $requestedIds)
+                    ->where('node_id', $cell->node_id)
+                    ->where('is_reserved', false)
+                    ->where(function ($query) use ($cell) {
+                        $query->whereNull('cell_id')
+                            ->orWhere('cell_id', $cell->id);
+                    })
+                    ->lockForUpdate()
+                    ->get();
+
+                abort_if(
+                    $requestedAllocations->count() !== $requestedIds->count(),
+                    422,
+                    'One or more selected allocations are not available on this node.'
+                );
+
+                $primaryAllocation = $requestedAllocations
+                    ->first(fn (NodeAllocation $allocation) => (string) $allocation->id === (string) $data['allocation_id']);
+
+                abort_unless($primaryAllocation, 422, 'The selected primary allocation is not available.');
+
+                NodeAllocation::query()
+                    ->where('cell_id', $cell->id)
+                    ->whereNotIn('id', $requestedIds)
+                    ->lockForUpdate()
+                    ->get()
+                    ->each
+                    ->update([
+                        'cell_id' => null,
+                    ]);
+
+                NodeAllocation::query()
+                    ->whereIn('id', $requestedIds)
+                    ->update([
+                        'cell_id' => $cell->id,
+                    ]);
+
+                $additionalAllocations = $requestedAllocations
+                    ->reject(fn (NodeAllocation $allocation) => (string) $allocation->id === (string) $primaryAllocation->id)
+                    ->sortBy([
+                        ['ip', 'asc'],
+                        ['port', 'asc'],
+                    ])
+                    ->values();
+
+                $metadata = $oldMetadata;
+
+                $metadata['limits'] = [
+                    ...(array) data_get($metadata, 'limits', []),
+                    'memory_mb' => (int) $data['memory_mb'],
+                    'cpu_percent' => (int) $data['cpu_percent'],
+                    'disk_mb' => (int) $data['disk_mb'],
+                ];
+
+                $metadata['variables'] = [
+                    ...(array) data_get($metadata, 'variables', []),
+                    'memory' => (string) $data['memory_mb'],
+                    'server_ip' => $primaryAllocation->ip,
+                    'server_port' => (string) $primaryAllocation->port,
+                ];
+
+                $metadata['allocation'] = [
+                    'id' => $primaryAllocation->id,
+                    'ip' => $primaryAllocation->ip,
+                    'port' => $primaryAllocation->port,
+                    'alias' => $primaryAllocation->alias,
+                    'primary' => true,
+                ];
+
+                $metadata['additional_allocations'] = $additionalAllocations
+                    ->map(fn (NodeAllocation $allocation) => [
+                        'id' => $allocation->id,
+                        'ip' => $allocation->ip,
+                        'port' => $allocation->port,
+                        'alias' => $allocation->alias,
+                    ])
+                    ->all();
+
+                $cell->forceFill([
+                    'name' => $data['name'],
+                    'primary_allocation_id' => $primaryAllocation->id,
+                    'metadata' => $metadata,
+                ])->save();
+            });
+
+            $cell->unsetRelation('allocation');
+            $cell->unsetRelation('allocations');
+            $cell->load([
+                'node',
+                'allocation',
+                'allocations',
+            ]);
+
+            $cell->invalidateWorkerSync();
+
+            $newAllocationIds = $cell->allocations
+                ->pluck('id')
+                ->map(fn ($id) => (string) $id)
+                ->sort()
+                ->values()
+                ->all();
+
+            $changedFields = collect([
+                'name' => [$old['name'], $data['name']],
+                'memory_mb' => [$old['memory_mb'], (int) $data['memory_mb']],
+                'cpu_percent' => [$old['cpu_percent'], (int) $data['cpu_percent']],
+                'disk_mb' => [$old['disk_mb'], (int) $data['disk_mb']],
+                'primary_allocation_id' => [$old['primary_allocation_id'], (string) $cell->primary_allocation_id],
+                'allocations' => [$old['allocation_ids'], $newAllocationIds],
+            ])->filter(fn (array $values) => $values[0] !== $values[1])
+                ->keys()
+                ->values()
+                ->all();
+
+            $cells->updateCellDefinition($cell);
+
+            $syncResult = $sync->inspect($cell->fresh([
+                'node',
+                'allocation',
+                'allocations',
+            ]));
+
+            if (! $syncResult['synced']) {
+                $audit->log(
+                    AuditEvent::SERVER_UPDATED,
+                    $cell,
+                    "Server \"{$cell->name}\" was updated, but the Worker remains out of sync.",
+                    [
+                        'cell_id' => $cell->id,
+                        'changed_fields' => $changedFields,
+                        'worker_sync_status' => $syncResult['status'],
+                        'differences' => $syncResult['differences'] ?? [],
+                    ]
+                );
+
+                return redirect()->route('admin.cells.show', $cell)->withErrors([
+                    'worker' => 'HivePanel saved the changes, but the Worker definition is still out of sync.',
+                ]);
+            }
+
+            $audit->log(
+                AuditEvent::SERVER_UPDATED,
+                $cell,
+                "Server \"{$cell->name}\" was updated.",
+                [
+                    'cell_id' => $cell->id,
+                    'changed_fields' => $changedFields,
+                    'worker_sync_status' => 'synced',
+                    'primary_allocation_id' => $cell->primary_allocation_id,
+                    'allocation_ids' => $newAllocationIds,
+                ]
+            );
+
+            return redirect()->route('admin.cells.show', $cell)->with('success', 'Cell updated successfully.');
+        } catch (Throwable $exception) {
+            report($exception);
+
+            try {
+                $sync->inspect($cell->fresh([
+                    'node',
+                    'allocation',
+                    'allocations',
+                ]));
+            } catch (Throwable $inspectionException) {
+                report($inspectionException);
+            }
+
+            return back()->withErrors([
+                'worker' => $exception->getMessage() ?: 'The Cell could not be updated.',
+            ]);
+        }
     }
 
     public function destroy(Cell $cell, CellNodeClient $cells, AuditLogger $audit)
     {
+        $cell->loadMissing([
+            'node',
+            'allocations',
+        ]);
+
         if ($cell->daemon_id && $cell->node) {
             $cells->deleteCell($cell);
         }
 
         DB::transaction(function () use ($cell, $audit) {
-            $cell->allocation?->update([
-                'cell_id' => null,
-            ]);
-
             $name = $cell->name;
             $id = $cell->id;
+
+            $cell->forceFill([
+                'primary_allocation_id' => null,
+            ])->save();
+
+            $cell->allocations()->update([
+                'cell_id' => null,
+            ]);
 
             $cell->delete();
 
@@ -406,6 +713,15 @@ class AdminCellController extends Controller
         });
 
         return redirect()->route('admin.cells.index');
+    }
+
+    private function workerCellIsRunning(array $workerCell): bool
+    {
+        if (($workerCell['running'] ?? false) === true) {
+            return true;
+        }
+
+        return strtolower((string) ($workerCell['status'] ?? '')) === 'running';
     }
 
     private function cellPayload(Cell $cell): array
@@ -428,6 +744,11 @@ class AdminCellController extends Controller
                 'checked_at' => $cell->worker_sync_checked_at?->toISOString(),
             ],
 
+            'worker_recovery' => [
+                'required' => $cell->worker_recovery_required,
+                'recreated_at' => $cell->worker_recreated_at?->toISOString(),
+            ],
+
             'owner' => $cell->owner ? [
                 'id' => $cell->owner->id,
                 'name' => $cell->owner->name,
@@ -447,6 +768,21 @@ class AdminCellController extends Controller
                 'port' => $cell->allocation->port,
                 'alias' => $cell->allocation->alias,
             ] : null,
+
+            'additional_allocations' => $cell->allocations
+                ->filter(fn (NodeAllocation $allocation) => (string) $allocation->id !== (string) $cell->primary_allocation_id)
+                ->sortBy([
+                    ['ip', 'asc'],
+                    ['port', 'asc'],
+                ])
+                ->map(fn (NodeAllocation $allocation) => [
+                    'id' => $allocation->id,
+                    'ip' => $allocation->ip,
+                    'port' => $allocation->port,
+                    'alias' => $allocation->alias,
+                ])
+                ->values()
+                ->all(),
 
             'limits' => $cell->limits,
             'variables' => $cell->variables,

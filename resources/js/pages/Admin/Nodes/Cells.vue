@@ -1,35 +1,55 @@
 <script setup lang="ts">
-import ConfirmationModal from '@/components/ui/ConfirmationModal.vue'
 import AppLayout from '@/layouts/AppLayout.vue'
-import { Head, Link, router } from '@inertiajs/vue3'
+import { Head, Link } from '@inertiajs/vue3'
 import {
+    Activity,
+    ArrowLeft,
     Boxes,
     CircleAlert,
     CircleCheck,
     CircleDashed,
+    CpuIcon,
     Edit,
     Eye,
     HardDrive,
-    Plus,
     Search,
     Server,
+    Settings,
+    SlidersHorizontal,
     TriangleAlert,
-    Trash2,
     User,
     WifiOff,
 } from 'lucide-vue-next'
 import { computed, ref } from 'vue'
 
 const props = defineProps<{
+    node: any
     cells: any[]
 }>()
 
-const cellToDelete = ref<any | null>(null)
-const deleting = ref(false)
 const search = ref('')
 const statusFilter = ref<'all' | 'healthy' | 'issues' | 'installing' | 'failed'>('all')
 
 const totalCells = computed(() => props.cells.length)
+
+const installedCount = computed(() =>
+    props.cells.filter((cell) => cell.install_status === 'installed').length
+)
+
+const syncIssueCount = computed(() =>
+    props.cells.filter((cell) =>
+        ['out_of_sync', 'missing', 'unreachable', 'error'].includes(cell.worker_sync?.status)
+    ).length
+)
+
+const allocationCount = computed(() =>
+    props.cells.reduce((total, cell) => {
+        const primary = cell.allocation ? 1 : 0
+        const additional = cell.additional_allocations?.length ?? 0
+
+        return total + primary + additional
+    }, 0)
+)
 
 const filteredCells = computed(() => {
     const query = search.value.trim().toLowerCase()
@@ -40,8 +60,6 @@ const filteredCells = computed(() => {
             cell.daemon_id,
             cell.owner?.name,
             cell.owner?.email,
-            cell.node?.name,
-            cell.node?.location,
             cell.allocation?.ip,
             cell.allocation?.port,
             cell.comb,
@@ -68,59 +86,6 @@ const filteredCells = computed(() => {
         }
     })
 })
-
-const assignedCount = computed(() =>
-    props.cells.reduce((total, cell) => {
-        const primary = cell.allocation ? 1 : 0
-        const additional = cell.additional_allocations?.length ?? 0
-
-        return total + primary + additional
-    }, 0)
-)
-
-const cellsWithAllocations = computed(() =>
-    props.cells.filter((cell) => cell.allocation).length
-)
-
-const additionalAllocationCount = computed(() =>
-    props.cells.reduce((total, cell) => total + (cell.additional_allocations?.length ?? 0), 0)
-)
-
-const syncIssueCount = computed(() =>
-    props.cells.filter((cell) =>
-        ['out_of_sync', 'missing', 'unreachable', 'error'].includes(cell.worker_sync?.status)
-    ).length
-)
-
-function confirmDelete(cell: any) {
-    cellToDelete.value = cell
-}
-
-function cancelDelete() {
-    if (deleting.value) return
-    cellToDelete.value = null
-}
-
-function deleteCell() {
-    if (!cellToDelete.value) return
-
-    const routeId = cellToDelete.value.uuid ?? cellToDelete.value.id
-
-    if (!routeId) {
-        console.error('Missing cell route id', cellToDelete.value)
-        return
-    }
-
-    deleting.value = true
-
-    router.delete(`/admin/cells/${routeId}`, {
-        preserveScroll: true,
-        onFinish: () => {
-            deleting.value = false
-            cellToDelete.value = null
-        },
-    })
-}
 
 function installStatusClass(status?: string) {
     switch (status) {
@@ -150,11 +115,7 @@ function syncStatusClass(status?: string | null) {
             return 'border-status-warning/30 bg-status-warning/10 text-status-warning'
 
         case 'missing':
-            return 'border-status-danger/30 bg-status-danger/10 text-status-danger'
-
         case 'unreachable':
-            return 'border-status-danger/30 bg-status-danger/10 text-status-danger'
-        
         case 'error':
             return 'border-status-danger/30 bg-status-danger/10 text-status-danger'
 
@@ -198,7 +159,7 @@ function syncStatusIcon(status?: string | null) {
 
         case 'unreachable':
             return WifiOff
-        
+
         case 'error':
             return CircleAlert
 
@@ -207,57 +168,16 @@ function syncStatusIcon(status?: string | null) {
     }
 }
 
-function syncStatusDescription(cell: any) {
-    const status = cell.worker_sync?.status
-
-    if (!status) {
-        return 'Worker sync has not been checked yet.'
-    }
-
-    if (status === 'synced') {
-        return cell.worker_sync?.checked_at
-            ? `Checked ${formatDate(cell.worker_sync.checked_at)}`
-            : 'Worker definition matches HivePanel.'
-    }
-
-    if (status === 'out_of_sync') {
-        const count = cell.worker_sync?.differences?.length ?? 0
-
-        if (count === 1) {
-            return '1 definition difference'
-        }
-
-        if (count > 1) {
-            return `${count} definition differences`
-        }
-
-        return 'Worker definition differs from HivePanel.'
-    }
-
-    if (status === 'missing') {
-        return 'Cell is missing from the Worker.'
-    }
-
-    if (status === 'unreachable') {
-        return 'Worker could not be contacted.'
-    }
-
-    if (status === 'error') {
-        return cell.worker_sync?.message || 'Worker reconciliation failed.'
-    }
-
-    return cell.worker_sync?.message || 'Unknown Worker sync state.'
-}
-
 function formatDate(value?: string) {
     if (!value) return 'Never'
+
     return new Date(value).toLocaleString()
 }
 </script>
 
 <template>
     <AppLayout :context="'admin'">
-        <Head title="Cells" />
+        <Head :title="`${node.name} Cells`" />
 
         <div class="min-h-screen bg-surface-dark text-white">
             <main class="px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
@@ -265,25 +185,88 @@ function formatDate(value?: string) {
                     <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
                         <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                             <div class="flex items-center gap-3">
-                                <Server class="size-6 text-hive" />
+                                <CpuIcon class="size-6 text-hive" />
 
                                 <div>
-                                    <h1 class="text-2xl font-black sm:text-3xl">
-                                        Cells
-                                    </h1>
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <h1 class="text-2xl font-black sm:text-3xl">
+                                            {{ node.name }} - Cells
+                                        </h1>
+
+                                        <span
+                                            v-if="node.location"
+                                            class="rounded-full border border-hive/30 bg-hive/10 px-2 py-0.5 text-xs font-bold text-hive"
+                                        >
+                                            {{ node.location }}
+                                        </span>
+                                    </div>
 
                                     <p class="mt-2 text-sm text-zinc-400">
-                                        Manage deployed cells and their allocations on worker nodes.
+                                        Review every Cell deployed to this Worker node.
                                     </p>
                                 </div>
                             </div>
 
                             <Link
-                                href="/admin/cells/create"
-                                class="inline-flex items-center justify-center gap-2 rounded-button border border-hive bg-hive px-4 py-2 text-sm font-black text-black transition hover:bg-hive-light"
+                                href="/admin/nodes"
+                                class="inline-flex items-center justify-center gap-2 rounded-button border border-zinc-800 bg-[#0d0f11] px-4 py-2 text-sm font-black text-zinc-300 transition hover:border-hive/40 hover:text-white"
                             >
-                                <Plus class="size-4" />
-                                New Cell
+                                <ArrowLeft class="size-4" />
+                                Back to Nodes
+                            </Link>
+                        </div>
+                    </section>
+
+                    <section class="rounded-panel border border-zinc-800 bg-surface p-1">
+                        <div class="flex flex-wrap gap-1">
+                            <Link
+                                :href="`/admin/nodes/${node.id}`"
+                                class="rounded-button px-4 py-3 text-sm font-bold text-zinc-400 transition hover:bg-surface-light hover:text-white"
+                            >
+                                <span class="inline-flex items-center gap-2">
+                                    <Activity class="size-4" />
+                                    Overview
+                                </span>
+                            </Link>
+
+                            <Link
+                                :href="`/admin/nodes/${node.id}/settings`"
+                                class="rounded-button px-4 py-3 text-sm font-bold text-zinc-400 transition hover:bg-surface-light hover:text-white"
+                            >
+                                <span class="inline-flex items-center gap-2">
+                                    <Settings class="size-4" />
+                                    Settings
+                                </span>
+                            </Link>
+
+                            <Link
+                                :href="`/admin/nodes/${node.id}/configuration`"
+                                class="rounded-button px-4 py-3 text-sm font-bold text-zinc-400 transition hover:bg-surface-light hover:text-white"
+                            >
+                                <span class="inline-flex items-center gap-2">
+                                    <SlidersHorizontal class="size-4" />
+                                    Configuration
+                                </span>
+                            </Link>
+
+                            <Link
+                                :href="`/admin/nodes/${node.id}/allocations`"
+                                class="rounded-button px-4 py-3 text-sm font-bold text-zinc-400 transition hover:bg-surface-light hover:text-white"
+                            >
+                                <span class="inline-flex items-center gap-2">
+                                    <HardDrive class="size-4" />
+                                    Allocations
+                                </span>
+                            </Link>
+
+                            <Link
+                                :href="`/admin/nodes/${node.id}/cells`"
+                                class="rounded-button bg-hive/10 px-4 py-3 text-sm font-black text-hive"
+                            >
+                                <span class="inline-flex items-center gap-2">
+                                    <Server class="size-4" />
+                                    Cells
+                                </span>
                             </Link>
                         </div>
                     </section>
@@ -293,35 +276,41 @@ function formatDate(value?: string) {
                             <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
                                 Total Cells
                             </div>
+
                             <div class="mt-1 text-2xl font-black">
                                 {{ totalCells }}
                             </div>
+
                             <div class="mt-1 text-xs text-zinc-500">
-                                created cells
+                                deployed to this node
                             </div>
                         </div>
 
                         <div class="rounded-panel border border-zinc-800 bg-surface p-5">
                             <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
-                                Total Allocations
+                                Installed
                             </div>
+
+                            <div class="mt-1 text-2xl font-black text-status-success">
+                                {{ installedCount }}
+                            </div>
+
+                            <div class="mt-1 text-xs text-zinc-500">
+                                completed installations
+                            </div>
+                        </div>
+
+                        <div class="rounded-panel border border-zinc-800 bg-surface p-5">
+                            <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                Allocations
+                            </div>
+
                             <div class="mt-1 text-2xl font-black text-hive">
-                                {{ assignedCount }}
+                                {{ allocationCount }}
                             </div>
+
                             <div class="mt-1 text-xs text-zinc-500">
                                 primary + additional
-                            </div>
-                        </div>
-
-                        <div class="rounded-panel border border-zinc-800 bg-surface p-5">
-                            <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
-                                Unassigned
-                            </div>
-                            <div class="mt-1 text-2xl font-black text-status-warning">
-                                {{ totalCells - cellsWithAllocations }}
-                            </div>
-                            <div class="mt-1 text-xs text-zinc-500">
-                                cells missing primary
                             </div>
                         </div>
 
@@ -329,19 +318,8 @@ function formatDate(value?: string) {
                             class="rounded-panel border bg-surface p-5"
                             :class="syncIssueCount > 0 ? 'border-status-danger/30' : 'border-zinc-800'"
                         >
-                            <div class="flex items-center justify-between">
-                                <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
-                                    Sync Issues
-                                </div>
-
-                                <TriangleAlert
-                                    v-if="syncIssueCount > 0"
-                                    class="size-4 text-status-danger"
-                                />
-                                <CircleCheck
-                                    v-else
-                                    class="size-4 text-status-success"
-                                />
+                            <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                Sync Issues
                             </div>
 
                             <div
@@ -352,21 +330,21 @@ function formatDate(value?: string) {
                             </div>
 
                             <div class="mt-1 text-xs text-zinc-500">
-                                cells requiring attention · {{ additionalAllocationCount }} additional allocations
+                                requiring attention
                             </div>
                         </div>
                     </section>
 
-                    <section class="rounded-panel border border-zinc-800 bg-surface">
+                    <section class="overflow-hidden rounded-panel border border-zinc-800 bg-surface">
                         <div class="border-b border-zinc-800 p-5 sm:p-6">
                             <div class="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
                                 <div>
                                     <h2 class="text-lg font-black">
-                                        All Cells
+                                        Node Cells
                                     </h2>
 
                                     <p class="mt-1 text-sm text-zinc-500">
-                                        Review deployment, networking, installation and Worker reconciliation state.
+                                        Installation, networking and Worker synchronization state for this node.
                                     </p>
                                 </div>
 
@@ -402,16 +380,16 @@ function formatDate(value?: string) {
 
                         <div
                             v-if="cells.length === 0"
-                            class="rounded-button border border-zinc-900 bg-[#0d0f11] p-10 text-center"
+                            class="p-10 text-center"
                         >
                             <Server class="mx-auto size-10 text-zinc-700" />
 
                             <h2 class="mt-4 text-lg font-black text-zinc-300">
-                                No cells yet
+                                No Cells on this node
                             </h2>
 
                             <p class="mt-2 text-sm text-zinc-500">
-                                Add your first cell to get started.
+                                This Worker does not currently have any Cells assigned.
                             </p>
                         </div>
 
@@ -436,15 +414,10 @@ function formatDate(value?: string) {
                                     <tr>
                                         <th class="px-5 py-4 text-left text-xs font-black uppercase tracking-wide text-zinc-500">Cell</th>
                                         <th class="px-5 py-4 text-left text-xs font-black uppercase tracking-wide text-zinc-500">Owner</th>
-                                        <th class="px-5 py-4 text-left text-xs font-black uppercase tracking-wide text-zinc-500">Node</th>
                                         <th class="px-5 py-4 text-left text-xs font-black uppercase tracking-wide text-zinc-500">Allocation</th>
                                         <th class="px-5 py-4 text-left text-xs font-black uppercase tracking-wide text-zinc-500">Comb</th>
-                                        <th class="px-5 py-4 text-left text-xs font-black uppercase tracking-wide text-zinc-500">
-                                            Install Status
-                                        </th>
-                                        <th class="px-5 py-4 text-left text-xs font-black uppercase tracking-wide text-zinc-500">
-                                            Worker Sync
-                                        </th>
+                                        <th class="px-5 py-4 text-left text-xs font-black uppercase tracking-wide text-zinc-500">Install</th>
+                                        <th class="px-5 py-4 text-left text-xs font-black uppercase tracking-wide text-zinc-500">Worker Sync</th>
                                         <th class="px-5 py-4 text-left text-xs font-black uppercase tracking-wide text-zinc-500">Created</th>
                                         <th class="px-5 py-4 text-right text-xs font-black uppercase tracking-wide text-zinc-500">Actions</th>
                                     </tr>
@@ -463,6 +436,7 @@ function formatDate(value?: string) {
                                             >
                                                 {{ cell.name }}
                                             </Link>
+
                                             <div class="mt-1 font-mono text-xs text-zinc-500">
                                                 {{ cell.daemon_id || 'No daemon ID' }}
                                             </div>
@@ -471,20 +445,11 @@ function formatDate(value?: string) {
                                         <td class="px-5 py-4">
                                             <div class="flex items-center gap-2 text-sm font-bold text-zinc-300">
                                                 <User class="size-4 text-zinc-500" />
-                                                <span>{{ cell.owner?.name || 'Unknown' }}</span>
+                                                {{ cell.owner?.name || 'Unknown' }}
                                             </div>
+
                                             <div class="mt-1 text-xs text-zinc-500">
                                                 {{ cell.owner?.email || 'No email' }}
-                                            </div>
-                                        </td>
-
-                                        <td class="px-5 py-4">
-                                            <div class="flex items-center gap-2 text-sm font-bold text-zinc-300">
-                                                <Server class="size-4 text-zinc-500" />
-                                                <span>{{ cell.node?.name || 'Unknown' }}</span>
-                                            </div>
-                                            <div class="mt-1 text-xs text-zinc-500">
-                                                {{ cell.node?.location || 'No location' }}
                                             </div>
                                         </td>
 
@@ -500,18 +465,8 @@ function formatDate(value?: string) {
                                                     </span>
                                                 </div>
 
-                                                <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
-                                                    <span v-if="cell.allocation?.alias">
-                                                        {{ cell.allocation.alias }}
-                                                    </span>
-
-                                                    <span v-if="cell.additional_allocations?.length">
-                                                        +{{ cell.additional_allocations.length }} additional
-                                                    </span>
-
-                                                    <span v-else>
-                                                        No additional allocations
-                                                    </span>
+                                                <div class="mt-1 text-xs text-zinc-500">
+                                                    {{ cell.additional_allocations?.length ?? 0 }} additional
                                                 </div>
                                             </div>
 
@@ -522,7 +477,7 @@ function formatDate(value?: string) {
 
                                         <td class="px-5 py-4">
                                             <div class="inline-flex items-center gap-2 rounded-full border border-zinc-800 bg-[#0d0f11] px-3 py-1 text-xs font-black text-zinc-300">
-                                                <HardDrive class="size-3" />
+                                                <Boxes class="size-3" />
                                                 {{ cell.comb }}
                                             </div>
                                         </td>
@@ -534,36 +489,19 @@ function formatDate(value?: string) {
                                             >
                                                 {{ cell.install_status_label || cell.install_status || 'Unknown' }}
                                             </span>
-
-                                            <div
-                                                v-if="cell.install_status === 'failed' && cell.install_failure_reason"
-                                                class="mt-1 max-w-[260px] truncate text-xs text-status-danger"
-                                                :title="cell.install_failure_reason"
-                                            >
-                                                {{ cell.install_failure_reason }}
-                                            </div>
                                         </td>
 
                                         <td class="px-5 py-4">
-                                            <div>
-                                                <span
-                                                    class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-black"
-                                                    :class="syncStatusClass(cell.worker_sync?.status)"
-                                                >
-                                                    <component
-                                                        :is="syncStatusIcon(cell.worker_sync?.status)"
-                                                        class="size-3.5"
-                                                    />
-                                                    {{ syncStatusLabel(cell.worker_sync?.status) }}
-                                                </span>
-
-                                                <div
-                                                    class="mt-1.5 max-w-[240px] truncate text-xs text-zinc-500"
-                                                    :title="cell.worker_sync?.message || syncStatusDescription(cell)"
-                                                >
-                                                    {{ syncStatusDescription(cell) }}
-                                                </div>
-                                            </div>
+                                            <span
+                                                class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-black"
+                                                :class="syncStatusClass(cell.worker_sync?.status)"
+                                            >
+                                                <component
+                                                    :is="syncStatusIcon(cell.worker_sync?.status)"
+                                                    class="size-3.5"
+                                                />
+                                                {{ syncStatusLabel(cell.worker_sync?.status) }}
+                                            </span>
                                         </td>
 
                                         <td class="px-5 py-4 text-sm font-bold text-zinc-500">
@@ -587,15 +525,6 @@ function formatDate(value?: string) {
                                                     <Edit class="size-4" />
                                                     Edit
                                                 </Link>
-
-                                                <button
-                                                    type="button"
-                                                    class="inline-flex items-center gap-2 rounded-button border border-status-danger/40 bg-status-danger/10 px-3 py-2 text-xs font-black text-status-danger transition hover:bg-status-danger/20"
-                                                    @click="confirmDelete(cell)"
-                                                >
-                                                    <Trash2 class="size-4" />
-                                                    Delete
-                                                </button>
                                             </div>
                                         </td>
                                     </tr>
@@ -606,17 +535,5 @@ function formatDate(value?: string) {
                 </div>
             </main>
         </div>
-
-        <ConfirmationModal
-            :open="!!cellToDelete"
-            title="Delete Cell?"
-            :description="`Are you sure you wish to delete '${cellToDelete?.name}'? This action cannot be undone.`"
-            confirm-text="Delete Cell"
-            cancel-text="Cancel"
-            :danger="true"
-            :loading="deleting"
-            @cancel="cancelDelete"
-            @confirm="deleteCell"
-        />
     </AppLayout>
 </template>

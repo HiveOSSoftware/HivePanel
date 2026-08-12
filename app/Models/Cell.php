@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\CellInstallStatus;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Cell extends Model
@@ -18,6 +19,7 @@ class Cell extends Model
         'uuid',
         'owner_id',
         'node_id',
+        'primary_allocation_id',
         'daemon_id',
         'name',
         'comb',
@@ -29,6 +31,8 @@ class Cell extends Model
         'worker_sync_message',
         'worker_sync_differences',
         'worker_sync_checked_at',
+        'worker_recovery_required',
+        'worker_recreated_at',
     ];
 
     protected $appends = [
@@ -49,6 +53,8 @@ class Cell extends Model
             'installed_at' => 'datetime',
             'worker_sync_differences' => 'array',
             'worker_sync_checked_at' => 'datetime',
+            'worker_recovery_required' => 'boolean',
+            'worker_recreated_at' => 'datetime',
         ];
     }
 
@@ -84,7 +90,42 @@ class Cell extends Model
 
     public function getAdditionalAllocationsAttribute(): array
     {
-        return data_get($this->metadata ?? [], 'additional_allocations', []);
+        if ($this->relationLoaded('allocations')) {
+            return $this->allocations
+                ->filter(fn (NodeAllocation $allocation) => (int) $allocation->id !== (int) $this->primary_allocation_id)
+                ->map(fn (NodeAllocation $allocation) => [
+                    'id' => $allocation->id,
+                    'ip' => $allocation->ip,
+                    'port' => $allocation->port,
+                    'alias' => $allocation->alias,
+                ])
+                ->values()
+                ->all();
+        }
+
+        return $this->allocations()
+            ->when($this->primary_allocation_id, fn ($query) => $query->where('id', '!=', $this->primary_allocation_id))
+            ->orderBy('ip')
+            ->orderBy('port')
+            ->get()
+            ->map(fn (NodeAllocation $allocation) => [
+                'id' => $allocation->id,
+                'ip' => $allocation->ip,
+                'port' => $allocation->port,
+                'alias' => $allocation->alias,
+            ])
+            ->values()
+            ->all();
+    }
+
+    public function invalidateWorkerSync(): void
+    {
+        $this->forceFill([
+            'worker_sync_status' => null,
+            'worker_sync_message' => null,
+            'worker_sync_differences' => null,
+            'worker_sync_checked_at' => null,
+        ])->save();
     }
 
     public function scopeVisibleTo($query, User $user)
@@ -147,19 +188,19 @@ class Cell extends Model
         return $this->belongsTo(Node::class, 'node_id');
     }
 
-    public function allocation()
+    public function allocation(): BelongsTo
     {
-        return $this->hasOne(NodeAllocation::class);
+        return $this->belongsTo(NodeAllocation::class, 'primary_allocation_id');
     }
 
-    public function allocations()
+    public function allocations(): HasMany
     {
-        return $this->hasMany(NodeAllocation::class);
+        return $this->hasMany(NodeAllocation::class, 'cell_id');
     }
 
     public function sftpCredentials()
     {
-        return $this->hasMany(\App\Models\SftpCredential::class);
+        return $this->hasMany(SftpCredential::class);
     }
 
     public function backups(): HasMany

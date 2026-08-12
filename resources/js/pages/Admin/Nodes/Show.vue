@@ -1,23 +1,43 @@
 <script setup lang="ts">
 import UsageChart from '@/components/charts/UsageChart.vue'
+import ConfirmationModal from '@/components/ui/ConfirmationModal.vue'
 import AppLayout from '@/layouts/AppLayout.vue'
-import { Head, Link } from '@inertiajs/vue3'
+import { Head, Link, router } from '@inertiajs/vue3'
 import {
     Activity,
     ArrowLeft,
+    CircleCheck,
     CpuIcon,
     HardDrive,
     Info,
+    Network,
     Server,
     Settings,
     SlidersHorizontal,
+    Trash2,
+    TriangleAlert,
     Wifi,
+    WifiOff,
 } from 'lucide-vue-next'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 
 const props = defineProps<{
     node: any
     cells: any[]
+    allocationSummary: {
+        total: number
+        available: number
+        assigned: number
+        reserved: number
+    }
+    cellSummary: {
+        total: number
+        installed: number
+        installing: number
+        failed: number
+        sync_issues: number
+        attention: number
+    }
 }>()
 
 const labels = ref<string[]>([])
@@ -29,6 +49,9 @@ const diskUsed = ref<number[]>([])
 const diskMax = ref<number[]>([])
 
 let timer: number | undefined
+
+const showDeleteModal = ref(false)
+const deleting = ref(false)
 
 const isOnline = computed(() => {
     if (!props.node.last_seen_at) return false
@@ -90,6 +113,34 @@ function formatDate(value?: string) {
 
 function url(node: any) {
     return node.public_url ?? `${node.scheme}://${node.fqdn}:${node.port}`
+}
+
+function workerBadgeClass() {
+    if (!props.node.is_registered) {
+        return 'border-status-danger/30 bg-status-danger/10 text-status-danger'
+    }
+
+    return isOnline.value
+        ? 'border-status-success/30 bg-status-success/10 text-status-success'
+        : 'border-status-danger/30 bg-status-danger/10 text-status-danger'
+}
+
+function workerBadgeIcon() {
+    return props.node.is_registered && isOnline.value
+        ? CircleCheck
+        : WifiOff
+}
+
+function deleteNode() {
+    deleting.value = true
+
+    router.delete(`/admin/nodes/${props.node.id}`, {
+        preserveScroll: true,
+        onFinish: () => {
+            deleting.value = false
+            showDeleteModal.value = false
+        },
+    })
 }
 
 onMounted(() => {
@@ -186,33 +237,149 @@ onUnmounted(() => {
                         </div>
                     </section>
 
-                    <section class="grid gap-3 md:grid-cols-4">
+                    <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
                         <div class="rounded-panel border border-zinc-800 bg-surface p-5">
                             <div class="text-xs font-black uppercase tracking-wide text-zinc-500">Worker</div>
-                            <div class="mt-1 text-lg font-black" :class="isOnline ? 'text-status-success' : 'text-zinc-400'">
-                                ● {{ workerStatusLabel }}
+
+                            <div class="mt-2">
+                                <span
+                                    class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-black"
+                                    :class="workerBadgeClass()"
+                                >
+                                    <component :is="workerBadgeIcon()" class="size-3.5" />
+                                    {{ workerStatusLabel }}
+                                </span>
                             </div>
-                            <div class="mt-1 text-xs text-zinc-500">Last seen {{ formatDate(node.last_seen_at) }}</div>
+
+                            <div class="mt-2 text-xs text-zinc-500">
+                                Last seen {{ formatDate(node.last_seen_at) }}
+                            </div>
                         </div>
 
-                        <div class="rounded-panel border border-zinc-800 bg-surface p-5">
-                            <div class="text-xs font-black uppercase tracking-wide text-zinc-500">Cells</div>
-                            <div class="mt-1 text-2xl font-black">
-                                {{ node.live_stat?.cells_running ?? 0 }} / {{ node.live_stat?.cells_total ?? cells.length }}
+                        <Link
+                            :href="`/admin/nodes/${node.id}/cells`"
+                            class="rounded-panel border border-zinc-800 bg-surface p-5 transition hover:border-hive/40 hover:bg-surface-light/40"
+                        >
+                            <div class="flex items-center gap-2 text-xs font-black uppercase tracking-wide text-zinc-500">
+                                <Server class="size-4 text-hive" />
+                                Cells
                             </div>
+
+                            <div class="mt-2 text-2xl font-black text-white">
+                                {{ node.live_stat?.cells_running ?? 0 }} / {{ cellSummary.total }}
+                            </div>
+
                             <div class="mt-1 text-xs text-zinc-500">running / total</div>
-                        </div>
+                        </Link>
+
+                        <Link
+                            :href="`/admin/nodes/${node.id}/allocations`"
+                            class="rounded-panel border border-zinc-800 bg-surface p-5 transition hover:border-hive/40 hover:bg-surface-light/40"
+                        >
+                            <div class="flex items-center gap-2 text-xs font-black uppercase tracking-wide text-zinc-500">
+                                <Network class="size-4 text-hive" />
+                                Allocations
+                            </div>
+
+                            <div class="mt-2 text-2xl font-black text-white">
+                                {{ allocationSummary.available }}
+                            </div>
+
+                            <div class="mt-1 text-xs text-zinc-500">
+                                available of {{ allocationSummary.total }}
+                            </div>
+                        </Link>
 
                         <div class="rounded-panel border border-zinc-800 bg-surface p-5">
-                            <div class="text-xs font-black uppercase tracking-wide text-zinc-500">Hostname</div>
-                            <div class="mt-1 break-all text-sm font-black">{{ node.worker_hostname || 'Unknown' }}</div>
-                            <div class="mt-1 text-xs text-zinc-500">{{ node.worker_platform || 'No platform' }}</div>
+                            <div class="text-xs font-black uppercase tracking-wide text-zinc-500">Installed</div>
+                            <div class="mt-2 text-2xl font-black text-status-success">{{ cellSummary.installed }}</div>
+                            <div class="mt-1 text-xs text-zinc-500">completed installs</div>
                         </div>
 
-                        <div class="rounded-panel border border-zinc-800 bg-surface p-5">
-                            <div class="text-xs font-black uppercase tracking-wide text-zinc-500">Version</div>
-                            <div class="mt-1 text-sm font-black">{{ node.worker_version || 'Unknown' }}</div>
-                            <div class="mt-1 text-xs text-zinc-500">{{ node.worker_ip || 'No IP' }}</div>
+                        <div
+                            class="rounded-panel border bg-surface p-5"
+                            :class="cellSummary.sync_issues > 0 ? 'border-status-warning/30' : 'border-zinc-800'"
+                        >
+                            <div class="text-xs font-black uppercase tracking-wide text-zinc-500">Sync Issues</div>
+
+                            <div
+                                class="mt-2 text-2xl font-black"
+                                :class="cellSummary.sync_issues > 0 ? 'text-status-warning' : 'text-status-success'"
+                            >
+                                {{ cellSummary.sync_issues }}
+                            </div>
+
+                            <div class="mt-1 text-xs text-zinc-500">Cells out of sync</div>
+                        </div>
+
+                        <div
+                            class="rounded-panel border bg-surface p-5"
+                            :class="cellSummary.attention > 0 ? 'border-status-danger/30' : 'border-zinc-800'"
+                        >
+                            <div class="flex items-center gap-2 text-xs font-black uppercase tracking-wide text-zinc-500">
+                                <TriangleAlert
+                                    v-if="cellSummary.attention > 0"
+                                    class="size-4 text-status-danger"
+                                />
+                                <CircleCheck
+                                    v-else
+                                    class="size-4 text-status-success"
+                                />
+                                Attention
+                            </div>
+
+                            <div
+                                class="mt-2 text-2xl font-black"
+                                :class="cellSummary.attention > 0 ? 'text-status-danger' : 'text-status-success'"
+                            >
+                                {{ cellSummary.attention }}
+                            </div>
+
+                            <div class="mt-1 text-xs text-zinc-500">failed installs + sync issues</div>
+                        </div>
+                    </section>
+
+                    <section
+                        v-if="cellSummary.attention > 0 || !node.is_registered || !isOnline"
+                        class="rounded-panel border border-status-warning/30 bg-status-warning/10 p-5 sm:p-6"
+                    >
+                        <div class="flex items-start gap-3">
+                            <TriangleAlert class="mt-0.5 size-5 shrink-0 text-status-warning" />
+
+                            <div class="min-w-0 flex-1">
+                                <h2 class="text-lg font-black text-status-warning">Needs Attention</h2>
+
+                                <div class="mt-2 space-y-1 text-sm leading-6 text-zinc-300">
+                                    <p v-if="!node.is_registered">This Worker has not completed registration.</p>
+                                    <p v-else-if="!isOnline">The Worker has not sent a recent heartbeat.</p>
+
+                                    <p v-if="cellSummary.failed > 0">
+                                        {{ cellSummary.failed }} {{ cellSummary.failed === 1 ? 'Cell has' : 'Cells have' }} failed installation state.
+                                    </p>
+
+                                    <p v-if="cellSummary.sync_issues > 0">
+                                        {{ cellSummary.sync_issues }} {{ cellSummary.sync_issues === 1 ? 'Cell requires' : 'Cells require' }} Worker reconciliation.
+                                    </p>
+                                </div>
+
+                                <div class="mt-4 flex flex-wrap gap-2">
+                                    <Link
+                                        v-if="cellSummary.attention > 0"
+                                        :href="`/admin/nodes/${node.id}/cells`"
+                                        class="inline-flex items-center rounded-button border border-status-warning/40 bg-status-warning/10 px-4 py-2 text-sm font-black text-status-warning transition hover:bg-status-warning/20"
+                                    >
+                                        Review Cells
+                                    </Link>
+
+                                    <Link
+                                        v-if="!node.is_registered"
+                                        :href="`/admin/nodes/${node.id}/configuration`"
+                                        class="inline-flex items-center rounded-button border border-hive/40 bg-hive/10 px-4 py-2 text-sm font-black text-hive transition hover:bg-hive/20"
+                                    >
+                                        Open Configuration
+                                    </Link>
+                                </div>
+                            </div>
                         </div>
                     </section>
 
@@ -221,45 +388,102 @@ onUnmounted(() => {
                             <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
                                 <div class="mb-5 flex items-center gap-3">
                                     <Info class="size-5 text-hive" />
-                                    <h2 class="text-lg font-black">Node Information</h2>
+                                    <h2 class="text-lg font-black">Worker Information</h2>
                                 </div>
 
-                                <div class="grid gap-4 md:grid-cols-3">
-                                    <div class="space-y-1">
-                                        <div class="text-sm font-bold text-zinc-500">Node Name</div>
-                                        <div class="font-black text-white">{{ node.name }}</div>
+                                <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                                    <div class="rounded-button border border-zinc-800 bg-[#0d0f11] p-4">
+                                        <div class="text-xs font-black uppercase tracking-wide text-zinc-500">Hostname</div>
+                                        <div class="mt-2 break-all text-sm font-black text-white">{{ node.worker_hostname || 'Unknown' }}</div>
+                                        <div class="mt-1 text-xs text-zinc-500">{{ node.worker_platform || 'No platform' }}</div>
                                     </div>
 
-                                    <div class="space-y-1">
-                                        <div class="text-sm font-bold text-zinc-500">Location</div>
-                                        <div class="font-black text-white">{{ node.location || 'Unset' }}</div>
+                                    <div class="rounded-button border border-zinc-800 bg-[#0d0f11] p-4">
+                                        <div class="text-xs font-black uppercase tracking-wide text-zinc-500">Worker Version</div>
+                                        <div class="mt-2 text-sm font-black text-white">{{ node.worker_version || 'Unknown' }}</div>
+                                        <div class="mt-1 text-xs text-zinc-500">{{ node.worker_ip || 'No Worker IP' }}</div>
                                     </div>
 
-                                    <div class="space-y-1">
-                                        <div class="text-sm font-bold text-zinc-500">Panel State</div>
-                                        <div :class="node.is_active ? 'text-status-success' : 'text-zinc-400'" class="font-black">
-                                            ● {{ node.is_active ? 'Active' : 'Inactive' }}
+                                    <div class="rounded-button border border-zinc-800 bg-[#0d0f11] p-4">
+                                        <div class="text-xs font-black uppercase tracking-wide text-zinc-500">Registration</div>
+                                        <div
+                                            class="mt-2 text-sm font-black"
+                                            :class="node.is_registered ? 'text-status-success' : 'text-status-danger'"
+                                        >
+                                            {{ node.is_registered ? 'Registered' : 'Not Registered' }}
+                                        </div>
+                                        <div class="mt-1 text-xs text-zinc-500">
+                                            {{ node.registered_at ? `Since ${formatDate(node.registered_at)}` : 'No registration timestamp' }}
                                         </div>
                                     </div>
 
-                                    <div class="space-y-1 md:col-span-3">
-                                        <div class="text-sm font-bold text-zinc-500">Public URL</div>
-                                        <div class="break-all font-mono font-black text-white">{{ url(node) }}</div>
+                                    <div class="rounded-button border border-zinc-800 bg-[#0d0f11] p-4">
+                                        <div class="text-xs font-black uppercase tracking-wide text-zinc-500">Panel State</div>
+                                        <div
+                                            class="mt-2 text-sm font-black"
+                                            :class="node.is_active ? 'text-status-success' : 'text-zinc-400'"
+                                        >
+                                            {{ node.is_active ? 'Active' : 'Inactive' }}
+                                        </div>
+                                        <div class="mt-1 text-xs text-zinc-500">
+                                            {{ node.maintenance_mode ? 'Maintenance mode enabled' : 'Normal operation' }}
+                                        </div>
                                     </div>
 
-                                    <div class="space-y-1">
-                                        <div class="text-sm font-bold text-zinc-500">Created At</div>
-                                        <div class="font-black text-white">{{ formatDate(node.created_at) }}</div>
+                                    <div class="rounded-button border border-zinc-800 bg-[#0d0f11] p-4">
+                                        <div class="text-xs font-black uppercase tracking-wide text-zinc-500">Location</div>
+                                        <div class="mt-2 text-sm font-black text-white">{{ node.location || 'Unset' }}</div>
+                                        <div class="mt-1 text-xs text-zinc-500">{{ node.name }}</div>
                                     </div>
 
-                                    <div class="space-y-1">
-                                        <div class="text-sm font-bold text-zinc-500">Last Updated</div>
-                                        <div class="font-black text-white">{{ formatDate(node.updated_at) }}</div>
+                                    <div class="rounded-button border border-zinc-800 bg-[#0d0f11] p-4">
+                                        <div class="text-xs font-black uppercase tracking-wide text-zinc-500">Live Stats</div>
+                                        <div class="mt-2 text-sm font-black text-white">{{ formatDate(node.live_stat?.updated_at) }}</div>
+                                        <div class="mt-1 text-xs text-zinc-500">Latest reported sample</div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
+                                <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                                    <div>
+                                        <div class="flex items-center gap-2">
+                                            <Network class="size-5 text-hive" />
+                                            <h2 class="text-lg font-black">Allocation Capacity</h2>
+                                        </div>
+
+                                        <p class="mt-1 text-sm text-zinc-500">
+                                            Exact IP and port entries currently configured for this Worker.
+                                        </p>
                                     </div>
 
-                                    <div class="space-y-1">
-                                        <div class="text-sm font-bold text-zinc-500">Live Stats Updated</div>
-                                        <div class="font-black text-white">{{ formatDate(node.live_stat?.updated_at) }}</div>
+                                    <Link
+                                        :href="`/admin/nodes/${node.id}/allocations`"
+                                        class="inline-flex items-center justify-center rounded-button border border-zinc-800 bg-[#0d0f11] px-4 py-2 text-sm font-black text-zinc-300 transition hover:border-hive hover:text-hive"
+                                    >
+                                        Manage Allocations
+                                    </Link>
+                                </div>
+
+                                <div class="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                                    <div class="rounded-button border border-zinc-800 bg-[#0d0f11] p-4">
+                                        <div class="text-xs font-black uppercase tracking-wide text-zinc-500">Total</div>
+                                        <div class="mt-1 text-2xl font-black text-white">{{ allocationSummary.total }}</div>
+                                    </div>
+
+                                    <div class="rounded-button border border-status-success/20 bg-status-success/5 p-4">
+                                        <div class="text-xs font-black uppercase tracking-wide text-zinc-500">Available</div>
+                                        <div class="mt-1 text-2xl font-black text-status-success">{{ allocationSummary.available }}</div>
+                                    </div>
+
+                                    <div class="rounded-button border border-hive/20 bg-hive/5 p-4">
+                                        <div class="text-xs font-black uppercase tracking-wide text-zinc-500">Assigned</div>
+                                        <div class="mt-1 text-2xl font-black text-hive">{{ allocationSummary.assigned }}</div>
+                                    </div>
+
+                                    <div class="rounded-button border border-status-warning/20 bg-status-warning/5 p-4">
+                                        <div class="text-xs font-black uppercase tracking-wide text-zinc-500">Reserved</div>
+                                        <div class="mt-1 text-2xl font-black text-status-warning">{{ allocationSummary.reserved }}</div>
                                     </div>
                                 </div>
                             </section>
@@ -313,9 +537,13 @@ onUnmounted(() => {
                                     </div>
 
                                     <button
+                                        type="button"
                                         class="rounded-button border border-status-danger bg-status-danger px-4 py-2 text-sm font-black text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
                                         :disabled="cells.length > 0"
+                                        :title="cells.length > 0 ? 'Move or delete all Cells before deleting this node.' : undefined"
+                                        @click="showDeleteModal = true"
                                     >
+                                        <Trash2 class="mr-2 inline size-4" />
                                         Delete This Node
                                     </button>
                                 </div>

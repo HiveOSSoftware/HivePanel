@@ -134,6 +134,7 @@ class CellNodeClient
         $cell->loadMissing([
             'node',
             'allocation',
+            'allocations',
         ]);
 
         return $this->nodeClient->client($cell->node)->post('/cells', [
@@ -144,17 +145,36 @@ class CellNodeClient
 
     public function definitionPayload(Cell $cell): array
     {
-        $cell->loadMissing('allocation');
+        $cell->loadMissing([
+            'allocation',
+            'allocations',
+        ]);
+
+        $primaryAllocationId = $cell->allocation?->id;
+
+        $additionalAllocations = $cell->allocations
+            ->filter(fn ($allocation) => $allocation->id !== $primaryAllocationId)
+            ->map(fn ($allocation) => [
+                'ip' => $allocation->ip,
+                'port' => $allocation->port,
+            ])
+            ->sortBy(fn (array $allocation) => $allocation['ip'] . ':' . str_pad((string) $allocation['port'], 5, '0', STR_PAD_LEFT))
+            ->values()
+            ->all();
 
         return [
             'name' => $cell->name,
             'comb' => $cell->comb,
             'comb_data' => $cell->comb_data,
             'variables' => $cell->variables,
+
             'allocation' => $cell->allocation ? [
                 'ip' => $cell->allocation->ip,
                 'port' => $cell->allocation->port,
             ] : null,
+
+            'additional_allocations' => $additionalAllocations,
+
             'limits' => [
                 'memory_mb' => (int) data_get($cell->limits, 'memory_mb', 1024),
                 'cpu_percent' => (int) data_get($cell->limits, 'cpu_percent', 100),

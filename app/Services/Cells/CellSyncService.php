@@ -2,6 +2,7 @@
 
 namespace App\Services\Cells;
 
+use App\Enums\CellInstallStatus;
 use App\Models\Cell;
 use App\Services\Node\CellNodeClient;
 use RuntimeException;
@@ -16,6 +17,7 @@ class CellSyncService
         $cell->loadMissing([
             'node',
             'allocation',
+            'allocations',
         ]);
 
         $this->validateCell($cell);
@@ -87,6 +89,7 @@ class CellSyncService
         $result = $this->inspect($cell->fresh([
             'node',
             'allocation',
+            'allocations',
         ]));
 
         if (! $result['synced']) {
@@ -94,6 +97,57 @@ class CellSyncService
         }
 
         return $result;
+    }
+
+    public function recreateMissing(Cell $cell): array
+    {
+        $inspection = $this->inspect($cell);
+
+        if ($inspection['status'] !== 'missing') {
+            throw new RuntimeException('This Cell is not missing from the Worker.');
+        }
+
+        if (! $cell->node) {
+            throw new RuntimeException('This Cell is not assigned to a node.');
+        }
+
+        if (! $cell->daemon_id) {
+            throw new RuntimeException('This Cell does not have a daemon ID.');
+        }
+
+        if (! $cell->allocation) {
+            throw new RuntimeException('This Cell does not have an allocation.');
+        }
+
+        $created = $this->cells->recreateMissingCell($cell);
+
+        if (($created['id'] ?? null) !== $cell->daemon_id) {
+            throw new RuntimeException('The Worker recreated the Cell with an unexpected ID.');
+        }
+
+        $result = $this->inspect($cell->fresh([
+            'node',
+            'allocation',
+            'allocations',
+        ]));
+
+        if (! $result['synced']) {
+            throw new RuntimeException('The Worker Cell was recreated but is still out of sync.');
+        }
+
+        $cell->forceFill([
+            'worker_recovery_required' => true,
+            'worker_recreated_at' => now(),
+            'install_status' => CellInstallStatus::PENDING,
+            'install_failure_reason' => null,
+            'installed_at' => null,
+        ])->save();
+
+        return [
+            ...$result,
+            'recovery_required' => true,
+            'message' => 'Worker Cell recreated successfully. Reinstallation is required to complete recovery.',
+        ];
     }
 
     private function storeInspection(Cell $cell, array $inspection): array
@@ -129,6 +183,7 @@ class CellSyncService
             'comb_data' => $payload['comb_data'] ?? [],
             'variables' => $payload['variables'] ?? [],
             'allocation' => $payload['allocation'] ?? null,
+            'additional_allocations' => $this->normaliseAllocations($payload['additional_allocations'] ?? []),
             'limits' => $payload['limits'] ?? [],
         ]);
     }
@@ -141,8 +196,31 @@ class CellSyncService
             'comb_data' => $worker['comb_data'] ?? [],
             'variables' => $worker['variables'] ?? [],
             'allocation' => $worker['allocation'] ?? null,
+            'additional_allocations' => $this->normaliseAllocations($worker['additional_allocations'] ?? []),
             'limits' => $worker['limits'] ?? [],
         ]);
+    }
+
+    private function normaliseAllocations(array $allocations): array
+    {
+        $allocations = array_map(function ($allocation) {
+            return [
+                'ip' => (string) ($allocation['ip'] ?? ''),
+                'port' => (int) ($allocation['port'] ?? 0),
+            ];
+        }, $allocations);
+
+        usort($allocations, function (array $a, array $b) {
+            $ipComparison = strcmp($a['ip'], $b['ip']);
+
+            if ($ipComparison !== 0) {
+                return $ipComparison;
+            }
+
+            return $a['port'] <=> $b['port'];
+        });
+
+        return array_values($allocations);
     }
 
     private function differences(array $expected, array $actual): array
@@ -164,44 +242,6 @@ class CellSyncService
         }
 
         return $differences;
-    }
-
-    public function recreateMissing(Cell $cell): array
-    {
-        $inspection = $this->inspect($cell);
-
-        if ($inspection['status'] !== 'missing') {
-            throw new RuntimeException('This Cell is not missing from the Worker.');
-        }
-
-        if (! $cell->node) {
-            throw new RuntimeException('This Cell is not assigned to a node.');
-        }
-
-        if (! $cell->daemon_id) {
-            throw new RuntimeException('This Cell does not have a daemon ID.');
-        }
-
-        if (! $cell->allocation) {
-            throw new RuntimeException('This Cell does not have an allocation.');
-        }
-
-        $created = $this->cells->recreateMissingCell($cell);
-
-        if (($created['id'] ?? null) !== $cell->daemon_id) {
-            throw new RuntimeException('The Worker recreated the Cell with an unexpected ID.');
-        }
-
-        $result = $this->inspect($cell->fresh([
-            'node',
-            'allocation',
-        ]));
-
-        if (! $result['synced']) {
-            throw new RuntimeException('The Worker Cell was recreated but is still out of sync.');
-        }
-
-        return $result;
     }
 
     private function normalise(array $value): array

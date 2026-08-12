@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Enums\AuditEvent;
 use App\Http\Controllers\Controller;
 use App\Models\Node;
+use App\Models\NodeAllocation;
 use App\Services\AuditLogger;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -32,23 +33,108 @@ class AdminNodeController extends Controller
     {
         $node->load('liveStat');
 
+        $allocations = $node->allocations()
+            ->get([
+                'id',
+                'cell_id',
+                'ip',
+                'port',
+                'alias',
+                'is_reserved',
+            ]);
+
+        $cells = $node->cells()
+            ->with([
+                'owner:id,name,email',
+                'allocation:id,cell_id,ip,port,alias',
+                'allocations:id,cell_id,ip,port,alias',
+            ])
+            ->latest()
+            ->get();
+
+        $allocationSummary = [
+            'total' => $allocations->count(),
+            'available' => $allocations
+                ->filter(fn (NodeAllocation $allocation) => ! $allocation->is_reserved && blank($allocation->cell_id))
+                ->count(),
+            'assigned' => $allocations
+                ->filter(fn (NodeAllocation $allocation) => filled($allocation->cell_id))
+                ->count(),
+            'reserved' => $allocations
+                ->filter(fn (NodeAllocation $allocation) => (bool) $allocation->is_reserved)
+                ->count(),
+        ];
+
+        $cellSummary = [
+            'total' => $cells->count(),
+            'installed' => $cells
+                ->filter(fn ($cell) => $cell->install_status->value === 'installed')
+                ->count(),
+            'installing' => $cells
+                ->filter(fn ($cell) => in_array($cell->install_status->value, ['pending', 'installing'], true))
+                ->count(),
+            'failed' => $cells
+                ->filter(fn ($cell) => $cell->install_status->value === 'failed')
+                ->count(),
+            'sync_issues' => $cells
+                ->filter(fn ($cell) => in_array(
+                    $cell->worker_sync_status,
+                    ['out_of_sync', 'missing', 'unreachable', 'error'],
+                    true
+                ))
+                ->count(),
+        ];
+
+        $cellSummary['attention'] = $cellSummary['failed'] + $cellSummary['sync_issues'];
+
         return Inertia::render('Admin/Nodes/Show', [
             'node' => $this->nodePayload($node),
-            'cells' => $node->cells()
-                ->with('owner:id,name,email')
-                ->latest()
-                ->get()
+            'allocationSummary' => $allocationSummary,
+            'cellSummary' => $cellSummary,
+            'cells' => $cells
                 ->map(fn ($cell) => [
                     'id' => $cell->id,
                     'name' => $cell->name,
                     'comb' => $cell->comb,
                     'daemon_id' => $cell->daemon_id,
+                    'install_status' => $cell->install_status->value,
+                    'install_status_label' => $cell->install_status->label(),
+                    'install_failure_reason' => $cell->install_failure_reason,
                     'owner' => $cell->owner ? [
+                        'id' => $cell->owner->id,
                         'name' => $cell->owner->name,
                         'email' => $cell->owner->email,
                     ] : null,
+                    'allocation' => $cell->allocation ? [
+                        'id' => $cell->allocation->id,
+                        'ip' => $cell->allocation->ip,
+                        'port' => $cell->allocation->port,
+                        'alias' => $cell->allocation->alias,
+                    ] : null,
+                    'additional_allocations' => $cell->allocations
+                        ->filter(fn (NodeAllocation $allocation) => (string) $allocation->id !== (string) $cell->primary_allocation_id)
+                        ->sortBy([
+                            ['ip', 'asc'],
+                            ['port', 'asc'],
+                        ])
+                        ->map(fn (NodeAllocation $allocation) => [
+                            'id' => $allocation->id,
+                            'ip' => $allocation->ip,
+                            'port' => $allocation->port,
+                            'alias' => $allocation->alias,
+                        ])
+                        ->values()
+                        ->all(),
+                    'worker_sync' => [
+                        'status' => $cell->worker_sync_status,
+                        'message' => $cell->worker_sync_message,
+                        'differences' => $cell->worker_sync_differences ?? [],
+                        'checked_at' => $cell->worker_sync_checked_at?->toISOString(),
+                    ],
                     'created_at' => $cell->created_at?->toISOString(),
-                ]),
+                    'updated_at' => $cell->updated_at?->toISOString(),
+                ])
+                ->values(),
         ]);
     }
 
@@ -100,9 +186,8 @@ docker:
   network: "hivepanel"
 
 allocations:
-  ip: "0.0.0.0"
-  port_start: 25565
-  port_end: 25600
+  entries:
+{$this->allocationEntriesYaml($node)}
 YAML;
 
         $systemdService = <<<SERVICE
@@ -137,6 +222,66 @@ SERVICE;
                 'sudo systemctl enable --now hivepanel-worker',
                 'sudo systemctl status hivepanel-worker',
             ],
+        ]);
+    }
+
+    public function cells(Node $node)
+    {
+        $node->load('liveStat');
+
+        return Inertia::render('Admin/Nodes/Cells', [
+            'node' => $this->nodePayload($node),
+            'cells' => $node->cells()
+                ->with([
+                    'owner:id,name,email',
+                    'allocation:id,cell_id,ip,port,alias',
+                    'allocations:id,cell_id,ip,port,alias',
+                ])
+                ->latest()
+                ->get()
+                ->map(fn ($cell) => [
+                    'id' => $cell->id,
+                    'name' => $cell->name,
+                    'comb' => $cell->comb,
+                    'daemon_id' => $cell->daemon_id,
+                    'install_status' => $cell->install_status->value,
+                    'install_status_label' => $cell->install_status->label(),
+                    'install_failure_reason' => $cell->install_failure_reason,
+                    'owner' => $cell->owner ? [
+                        'id' => $cell->owner->id,
+                        'name' => $cell->owner->name,
+                        'email' => $cell->owner->email,
+                    ] : null,
+                    'allocation' => $cell->allocation ? [
+                        'id' => $cell->allocation->id,
+                        'ip' => $cell->allocation->ip,
+                        'port' => $cell->allocation->port,
+                        'alias' => $cell->allocation->alias,
+                    ] : null,
+                    'additional_allocations' => $cell->allocations
+                        ->filter(fn (NodeAllocation $allocation) => (string) $allocation->id !== (string) $cell->primary_allocation_id)
+                        ->sortBy([
+                            ['ip', 'asc'],
+                            ['port', 'asc'],
+                        ])
+                        ->map(fn (NodeAllocation $allocation) => [
+                            'id' => $allocation->id,
+                            'ip' => $allocation->ip,
+                            'port' => $allocation->port,
+                            'alias' => $allocation->alias,
+                        ])
+                        ->values()
+                        ->all(),
+                    'worker_sync' => [
+                        'status' => $cell->worker_sync_status,
+                        'message' => $cell->worker_sync_message,
+                        'differences' => $cell->worker_sync_differences ?? [],
+                        'checked_at' => $cell->worker_sync_checked_at?->toISOString(),
+                    ],
+                    'created_at' => $cell->created_at?->toISOString(),
+                    'updated_at' => $cell->updated_at?->toISOString(),
+                ])
+                ->values(),
         ]);
     }
 
@@ -309,6 +454,7 @@ SERVICE;
 
             'scheme' => $node->scheme,
             'daemon_port' => $node->daemon_port,
+            'sftp_port' => $node->sftp_port,
             'sftp_enabled' => $node->sftp_enabled,
             'sftp_fqdn' => $node->sftp_fqdn,
             'sftp_host' => $node->sftpHost(),
@@ -356,6 +502,30 @@ SERVICE;
             'updated_at' => $node->updated_at?->toISOString(),
         ];
     }
+
+    private function allocationEntriesYaml(Node $node): string
+    {
+        $allocations = $node->allocations()
+            ->orderBy('ip')
+            ->orderBy('port')
+            ->get([
+                'ip',
+                'port',
+            ]);
+
+        if ($allocations->isEmpty()) {
+            return '    - ip: "0.0.0.0"' . PHP_EOL
+                . '      port: 25565';
+        }
+
+        return $allocations
+            ->map(fn (NodeAllocation $allocation) => implode(PHP_EOL, [
+                '    - ip: "' . addslashes($allocation->ip) . '"',
+                '      port: ' . (int) $allocation->port,
+            ]))
+            ->implode(PHP_EOL);
+    }
+
 
     private function bool(bool $value): string
     {

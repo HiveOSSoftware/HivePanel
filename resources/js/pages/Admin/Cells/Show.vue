@@ -19,6 +19,7 @@ import {
     Server,
     ShieldCheck,
     Trash2,
+    TriangleAlert,
     User,
     WifiOff,
     Wrench,
@@ -52,6 +53,11 @@ const showRecreateModal = ref(false)
 const recreateConfirmation = ref('')
 const recreatingSync = ref(false)
 
+const showRecoveryReinstallModal = ref(false)
+const recoveryReinstallConfirmation = ref('')
+const recoveryReinstalling = ref(false)
+const recoveryReinstallError = ref<string | null>(null)
+
 const syncResult = ref<SyncResult | null>(null)
 const checkingSync = ref(false)
 const repairingSync = ref(false)
@@ -61,11 +67,55 @@ const isInstalling = computed(() => props.cell.install_status === 'installing')
 const isPending = computed(() => props.cell.install_status === 'pending')
 const isFailed = computed(() => props.cell.install_status === 'failed')
 
+const allocationTotal = computed(() =>
+    (props.cell.allocation ? 1 : 0) + (props.cell.additional_allocations?.length ?? 0)
+)
+
+const workerHealthLabel = computed(() => {
+    switch (syncResult.value?.status) {
+        case 'synced':
+            return recoveryRequired.value ? 'Recovery Required' : 'Synced'
+
+        case 'out_of_sync':
+            return 'Out of Sync'
+
+        case 'missing':
+            return 'Missing'
+
+        case 'unreachable':
+            return 'Unavailable'
+
+        case 'error':
+            return 'Error'
+
+        default:
+            return 'Checking'
+    }
+})
+
+const workerHealthClass = computed(() =>
+    syncStatusClass(syncResult.value?.status)
+)
+
+const recoveryRequiredOverride = ref<boolean | null>(null)
+const workerRecreatedAtOverride = ref<string | null>(null)
+
+const recoveryRequired = computed(() => recoveryRequiredOverride.value ?? (props.cell.worker_recovery?.required === true))
+const workerRecreatedAt = computed(() => workerRecreatedAtOverride.value ?? props.cell.worker_recovery?.recreated_at ?? null)
+
 const canConfirmRecreate = computed(() =>
     recreateConfirmation.value === props.cell.name && !recreatingSync.value
 )
 
+const canConfirmRecoveryReinstall = computed(() =>
+    recoveryReinstallConfirmation.value === props.cell.name && !recoveryReinstalling.value
+)
+
 const syncStatusLabel = computed(() => {
+    if (syncResult.value?.status === 'synced' && recoveryRequired.value) {
+        return 'Synced · Recovery Required'
+    }
+
     switch (syncResult.value?.status) {
         case 'synced':
             return 'Synced'
@@ -88,6 +138,10 @@ const syncStatusLabel = computed(() => {
 })
 
 const syncStatusDescription = computed(() => {
+    if (syncResult.value?.status === 'synced' && recoveryRequired.value) {
+        return 'The Worker definition matches HivePanel, but this Cell still requires reinstallation to complete recovery.'
+    }
+
     switch (syncResult.value?.status) {
         case 'synced':
             return 'HivePanel and the Worker have matching definitions.'
@@ -134,8 +188,22 @@ function closeRecreateModal() {
     showRecreateModal.value = false
 }
 
+function openRecoveryReinstallModal() {
+    recoveryReinstallConfirmation.value = ''
+    recoveryReinstallError.value = null
+    showRecoveryReinstallModal.value = true
+}
+
+function closeRecoveryReinstallModal() {
+    if (recoveryReinstalling.value) return
+
+    recoveryReinstallConfirmation.value = ''
+    recoveryReinstallError.value = null
+    showRecoveryReinstallModal.value = false
+}
+
 async function checkWorkerSync() {
-    if (checkingSync.value || repairingSync.value || recreatingSync.value) return
+    if (checkingSync.value || repairingSync.value || recreatingSync.value || recoveryReinstalling.value) return
 
     checkingSync.value = true
 
@@ -156,7 +224,7 @@ async function checkWorkerSync() {
 }
 
 async function repairWorkerSync() {
-    if (repairingSync.value || checkingSync.value || recreatingSync.value || !syncResult.value?.repairable) return
+    if (repairingSync.value || checkingSync.value || recreatingSync.value || recoveryReinstalling.value || !syncResult.value?.repairable) return
 
     repairingSync.value = true
 
@@ -184,8 +252,15 @@ async function recreateWorkerCell() {
     try {
         const response = await axios.post(`/admin/cells/${props.cell.id}/sync/recreate`)
         syncResult.value = response.data
+        recoveryRequiredOverride.value = true
+        workerRecreatedAtOverride.value = response.data.recreated_at ?? new Date().toISOString()
         recreateConfirmation.value = ''
         showRecreateModal.value = false
+
+        router.reload({
+            only: ['cell'],
+            preserveScroll: true,
+        })
     } catch (error: any) {
         syncResult.value = error.response?.data || {
             status: 'error',
@@ -199,6 +274,32 @@ async function recreateWorkerCell() {
         showRecreateModal.value = false
     } finally {
         recreatingSync.value = false
+    }
+}
+
+async function recoveryReinstall() {
+    if (!canConfirmRecoveryReinstall.value) return
+
+    recoveryReinstalling.value = true
+    recoveryReinstallError.value = null
+
+    try {
+        await axios.post(`/admin/cells/${props.cell.id}/reinstall`, {
+            confirmation: recoveryReinstallConfirmation.value,
+            start_on_completion: false,
+        })
+
+        recoveryReinstallConfirmation.value = ''
+        showRecoveryReinstallModal.value = false
+
+        router.reload({
+            only: ['cell'],
+            preserveScroll: true,
+        })
+    } catch (error: any) {
+        recoveryReinstallError.value = error.response?.data?.message || 'Unable to start the recovery reinstall.'
+    } finally {
+        recoveryReinstalling.value = false
     }
 }
 
@@ -222,6 +323,10 @@ function installStatusClass(status?: string) {
 }
 
 function syncStatusClass(status?: string) {
+    if (status === 'synced' && recoveryRequired.value) {
+        return 'border-status-warning/30 bg-status-warning/10 text-status-warning'
+    }
+
     switch (status) {
         case 'synced':
             return 'border-status-success/30 bg-status-success/10 text-status-success'
@@ -256,7 +361,10 @@ function syncDifferenceLabel(field: string) {
             return 'Variables'
 
         case 'allocation':
-            return 'Allocation'
+            return 'Primary Allocation'
+
+        case 'additional_allocations':
+            return 'Additional Allocations'
 
         case 'limits':
             return 'Resource Limits'
@@ -427,7 +535,7 @@ onMounted(() => {
                         </div>
                     </section>
 
-                    <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                    <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
                         <div class="rounded-panel border border-zinc-800 bg-surface p-5">
                             <div class="flex items-center gap-2 text-xs font-black uppercase tracking-wide text-zinc-500">
                                 <Server class="size-4 text-hive" />
@@ -446,12 +554,12 @@ onMounted(() => {
                         <div class="rounded-panel border border-zinc-800 bg-surface p-5">
                             <div class="flex items-center gap-2 text-xs font-black uppercase tracking-wide text-zinc-500">
                                 <Network class="size-4 text-hive" />
-                                Allocation
+                                Primary
                             </div>
 
                             <div
                                 v-if="cell.allocation"
-                                class="mt-3 font-mono text-lg font-black text-white"
+                                class="mt-3 font-mono text-base font-black text-white"
                             >
                                 {{ cell.allocation.ip }}:{{ cell.allocation.port }}
                             </div>
@@ -465,6 +573,21 @@ onMounted(() => {
 
                             <div class="mt-1 text-xs text-zinc-500">
                                 {{ cell.allocation?.alias || 'No alias' }}
+                            </div>
+                        </div>
+
+                        <div class="rounded-panel border border-zinc-800 bg-surface p-5">
+                            <div class="flex items-center gap-2 text-xs font-black uppercase tracking-wide text-zinc-500">
+                                <Boxes class="size-4 text-hive" />
+                                Allocations
+                            </div>
+
+                            <div class="mt-3 text-lg font-black text-white">
+                                {{ allocationTotal }}
+                            </div>
+
+                            <div class="mt-1 text-xs text-zinc-500">
+                                {{ cell.additional_allocations?.length ?? 0 }} additional
                             </div>
                         </div>
 
@@ -485,21 +608,6 @@ onMounted(() => {
 
                         <div class="rounded-panel border border-zinc-800 bg-surface p-5">
                             <div class="flex items-center gap-2 text-xs font-black uppercase tracking-wide text-zinc-500">
-                                <User class="size-4 text-hive" />
-                                Owner
-                            </div>
-
-                            <div class="mt-3 truncate text-lg font-black text-white">
-                                {{ cell.owner?.name || 'Unknown' }}
-                            </div>
-
-                            <div class="mt-1 truncate text-xs text-zinc-500">
-                                {{ cell.owner?.email || 'No email' }}
-                            </div>
-                        </div>
-
-                        <div class="rounded-panel border border-zinc-800 bg-surface p-5">
-                            <div class="flex items-center gap-2 text-xs font-black uppercase tracking-wide text-zinc-500">
                                 <Database class="size-4 text-hive" />
                                 Installation
                             </div>
@@ -513,32 +621,166 @@ onMounted(() => {
                                 </span>
                             </div>
 
-                            <div
-                                v-if="isInstalled"
-                                class="mt-2 text-xs text-zinc-500"
-                            >
-                                {{ formatDate(cell.installed_at) }}
+                            <div class="mt-2 text-xs text-zinc-500">
+                                <template v-if="isInstalled">
+                                    {{ formatDate(cell.installed_at) }}
+                                </template>
+
+                                <template v-else-if="isInstalling">
+                                    Installation in progress
+                                </template>
+
+                                <template v-else-if="isPending">
+                                    Waiting for queue
+                                </template>
+
+                                <template v-else-if="isFailed">
+                                    Action required
+                                </template>
+
+                                <template v-else>
+                                    No installation data
+                                </template>
+                            </div>
+                        </div>
+
+                        <div class="rounded-panel border border-zinc-800 bg-surface p-5">
+                            <div class="flex items-center gap-2 text-xs font-black uppercase tracking-wide text-zinc-500">
+                                <ShieldCheck class="size-4 text-hive" />
+                                Worker
                             </div>
 
-                            <div
-                                v-else-if="isInstalling"
-                                class="mt-2 text-xs text-hive"
-                            >
-                                Installation in progress
+                            <div class="mt-3">
+                                <span
+                                    class="inline-flex items-center rounded-full border px-3 py-1 text-xs font-black"
+                                    :class="workerHealthClass"
+                                >
+                                    {{ workerHealthLabel }}
+                                </span>
                             </div>
 
-                            <div
-                                v-else-if="isPending"
-                                class="mt-2 text-xs text-status-warning"
-                            >
-                                Waiting for queue
+                            <div class="mt-2 text-xs text-zinc-500">
+                                {{ syncResult?.message || 'Checking Worker definition' }}
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
+                        <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                                <div class="flex items-center gap-2">
+                                    <Network class="size-5 text-hive" />
+
+                                    <h2 class="text-lg font-black">
+                                        Networking
+                                    </h2>
+                                </div>
+
+                                <p class="mt-1 text-sm text-zinc-500">
+                                    Exact primary and additional IP/port assignments currently attached to this Cell.
+                                </p>
                             </div>
 
-                            <div
-                                v-else-if="isFailed"
-                                class="mt-2 text-xs text-status-danger"
-                            >
-                                Action required
+                            <div class="flex flex-wrap items-center gap-2">
+                                <Link
+                                    :href="`/admin/cells/${cell.id}/edit`"
+                                    class="inline-flex items-center gap-2 rounded-button border border-zinc-800 bg-[#0d0f11] px-3 py-1.5 text-xs font-black text-zinc-300 transition hover:border-hive hover:text-hive"
+                                >
+                                    <Edit class="size-3.5" />
+                                    Edit Allocations
+                                </Link>
+                                <span class="inline-flex items-center rounded-full border border-hive/30 bg-hive/10 px-2.5 py-1 text-xs font-black text-hive">
+                                    {{ cell.allocation ? 1 : 0 }} Primary
+                                </span>
+
+                                <span class="inline-flex items-center rounded-full border border-zinc-700 bg-zinc-800 px-2.5 py-1 text-xs font-black text-zinc-300">
+                                    {{ cell.additional_allocations?.length ?? 0 }} Additional
+                                </span>
+                            </div>
+                        </div>
+
+                        <div class="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+                            <div class="rounded-button border border-hive/30 bg-hive/5 p-4">
+                                <div class="flex items-center justify-between gap-3">
+                                    <div class="text-xs font-black uppercase tracking-wide text-hive">
+                                        Primary Allocation
+                                    </div>
+
+                                    <span class="rounded-full border border-hive/30 bg-hive/10 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-hive">
+                                        Primary
+                                    </span>
+                                </div>
+
+                                <template v-if="cell.allocation">
+                                    <div class="mt-3 font-mono text-lg font-black text-white">
+                                        {{ cell.allocation.ip }}:{{ cell.allocation.port }}
+                                    </div>
+
+                                    <div class="mt-1 text-xs text-zinc-500">
+                                        {{ cell.allocation.alias || 'No alias' }}
+                                    </div>
+
+                                    <div class="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+                                        <div class="rounded-button border border-zinc-800 bg-black/20 p-3">
+                                            <div class="text-[10px] font-black uppercase tracking-wide text-zinc-600">
+                                                server_ip
+                                            </div>
+
+                                            <div class="mt-1 break-all font-mono text-xs font-black text-zinc-300">
+                                                {{ cell.variables?.server_ip || cell.allocation.ip }}
+                                            </div>
+                                        </div>
+
+                                        <div class="rounded-button border border-zinc-800 bg-black/20 p-3">
+                                            <div class="text-[10px] font-black uppercase tracking-wide text-zinc-600">
+                                                server_port
+                                            </div>
+
+                                            <div class="mt-1 font-mono text-xs font-black text-zinc-300">
+                                                {{ cell.variables?.server_port || cell.allocation.port }}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
+
+                                <div
+                                    v-else
+                                    class="mt-3 text-sm font-black text-status-warning"
+                                >
+                                    No primary allocation assigned
+                                </div>
+                            </div>
+
+                            <div>
+                                <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                    Additional Allocations
+                                </div>
+
+                                <div
+                                    v-if="!cell.additional_allocations || cell.additional_allocations.length === 0"
+                                    class="mt-3 rounded-button border border-zinc-800 bg-[#0d0f11] p-4 text-sm font-bold text-zinc-500"
+                                >
+                                    No additional allocations assigned.
+                                </div>
+
+                                <div
+                                    v-else
+                                    class="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
+                                >
+                                    <div
+                                        v-for="allocation in cell.additional_allocations"
+                                        :key="allocation.id"
+                                        class="rounded-button border border-zinc-800 bg-[#0d0f11] p-4"
+                                    >
+                                        <div class="font-mono text-sm font-black text-white">
+                                            {{ allocation.ip }}:{{ allocation.port }}
+                                        </div>
+
+                                        <div class="mt-1 text-xs text-zinc-500">
+                                            {{ allocation.alias || 'No alias' }}
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </section>
@@ -616,6 +858,60 @@ onMounted(() => {
                                 </div>
                             </section>
 
+                            <section
+                                v-if="recoveryRequired"
+                                class="rounded-panel border border-status-warning/30 bg-status-warning/10 p-5 sm:p-6"
+                            >
+                                <div class="flex items-start gap-3">
+                                    <div class="flex size-10 shrink-0 items-center justify-center rounded-button border border-status-warning/30 bg-status-warning/10 text-status-warning">
+                                        <TriangleAlert class="size-5" />
+                                    </div>
+
+                                    <div class="min-w-0 flex-1">
+                                        <div class="flex flex-wrap items-center gap-2">
+                                            <h2 class="text-lg font-black text-status-warning">
+                                                Reinstall Required
+                                            </h2>
+
+                                            <span class="inline-flex items-center rounded-full border border-status-warning/30 bg-status-warning/10 px-2.5 py-1 text-xs font-black text-status-warning">
+                                                Recovery
+                                            </span>
+                                        </div>
+
+                                        <p class="mt-2 text-sm leading-6 text-zinc-300">
+                                            The missing Worker Cell definition has been recreated successfully, but the Cell still needs to be reinstalled before it should be considered fully recovered.
+                                        </p>
+
+                                        <div class="mt-4 rounded-button border border-status-warning/20 bg-black/20 p-4">
+                                            <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                                Worker recreated
+                                            </div>
+
+                                            <div class="mt-1 text-sm font-bold text-zinc-300">
+                                                {{ formatDate(workerRecreatedAt || undefined) }}
+                                            </div>
+                                        </div>
+
+                                        <p class="mt-3 text-xs leading-5 text-zinc-500">
+                                            Worker synchronization may show as Synced because the stored definition matches HivePanel. Recovery remains incomplete until installation succeeds.
+                                        </p>
+
+                                        <button
+                                            type="button"
+                                            class="mt-4 inline-flex items-center justify-center gap-2 rounded-button border border-status-warning bg-status-warning px-4 py-2.5 text-sm font-black text-black transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                                            :disabled="recoveryReinstalling"
+                                            @click="openRecoveryReinstallModal"
+                                        >
+                                            <RefreshCw
+                                                class="size-4"
+                                                :class="{ 'animate-spin': recoveryReinstalling }"
+                                            />
+                                            {{ recoveryReinstalling ? 'Queueing Reinstall...' : 'Reinstall Cell' }}
+                                        </button>
+                                    </div>
+                                </div>
+                            </section>
+
                             <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
                                 <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                                     <div class="flex items-start gap-3">
@@ -681,13 +977,20 @@ onMounted(() => {
                                             <p class="mt-1 text-sm text-zinc-500">
                                                 {{ syncStatusDescription }}
                                             </p>
+
+                                            <p
+                                                v-if="cell.worker_sync?.checked_at"
+                                                class="mt-2 text-xs font-bold text-zinc-600"
+                                            >
+                                                Last checked {{ formatDate(cell.worker_sync.checked_at) }}
+                                            </p>
                                         </div>
                                     </div>
 
                                     <button
                                         type="button"
                                         class="inline-flex shrink-0 items-center justify-center gap-2 rounded-button border border-zinc-800 bg-surface-light px-4 py-2 text-sm font-bold text-zinc-300 transition hover:border-hive hover:text-hive disabled:cursor-not-allowed disabled:opacity-50"
-                                        :disabled="checkingSync || repairingSync || recreatingSync"
+                                        :disabled="checkingSync || repairingSync || recreatingSync || recoveryReinstalling"
                                         @click="checkWorkerSync"
                                     >
                                         <RefreshCw
@@ -720,18 +1023,38 @@ onMounted(() => {
                                 <template v-if="syncResult">
                                     <div
                                         v-if="syncResult.status === 'synced'"
-                                        class="mt-5 rounded-button border border-status-success/20 bg-status-success/5 p-4"
+                                        class="mt-5 rounded-button border p-4"
+                                        :class="recoveryRequired
+                                            ? 'border-status-warning/20 bg-status-warning/5'
+                                            : 'border-status-success/20 bg-status-success/5'"
                                     >
                                         <div class="flex items-start gap-3">
-                                            <CheckCircle2 class="mt-0.5 size-5 shrink-0 text-status-success" />
+                                            <TriangleAlert
+                                                v-if="recoveryRequired"
+                                                class="mt-0.5 size-5 shrink-0 text-status-warning"
+                                            />
+
+                                            <CheckCircle2
+                                                v-else
+                                                class="mt-0.5 size-5 shrink-0 text-status-success"
+                                            />
 
                                             <div>
-                                                <div class="text-sm font-black text-status-success">
-                                                    Definitions match
+                                                <div
+                                                    class="text-sm font-black"
+                                                    :class="recoveryRequired ? 'text-status-warning' : 'text-status-success'"
+                                                >
+                                                    {{ recoveryRequired ? 'Definitions match, recovery incomplete' : 'Definitions match' }}
                                                 </div>
 
                                                 <p class="mt-1 text-sm leading-6 text-zinc-400">
-                                                    The Cell name, Comb, Comb data, variables, allocation and resource limits stored by the Worker match HivePanel.
+                                                    <template v-if="recoveryRequired">
+                                                        The Worker definition matches HivePanel, but the Cell must still be reinstalled before recovery is complete.
+                                                    </template>
+
+                                                    <template v-else>
+                                                        The Cell name, Comb, Comb data, variables, primary allocation, additional allocations and resource limits stored by the Worker match HivePanel.
+                                                    </template>
                                                 </p>
                                             </div>
                                         </div>
@@ -793,7 +1116,7 @@ onMounted(() => {
                                             v-if="syncResult.repairable"
                                             type="button"
                                             class="mt-4 inline-flex items-center justify-center gap-2 rounded-button border border-hive bg-hive px-4 py-2.5 text-sm font-black text-black transition hover:bg-hive-light disabled:cursor-not-allowed disabled:opacity-50"
-                                            :disabled="repairingSync || checkingSync || recreatingSync"
+                                            :disabled="repairingSync || checkingSync || recreatingSync || recoveryReinstalling"
                                             @click="repairWorkerSync"
                                         >
                                             <RefreshCw
@@ -828,7 +1151,7 @@ onMounted(() => {
                                                 </p>
 
                                                 <p class="mt-2 text-xs leading-5 text-zinc-500">
-                                                    HivePanel can recreate the missing Worker definition using the existing daemon ID, allocation, Comb, variables and resource limits.
+                                                    HivePanel can recreate the missing Worker definition using the existing daemon ID, primary allocation, additional allocations, Comb, variables and resource limits.
                                                 </p>
 
                                                 <div class="mt-4 rounded-button border border-status-danger/20 bg-black/20 p-4">
@@ -844,7 +1167,7 @@ onMounted(() => {
                                                 <button
                                                     type="button"
                                                     class="mt-4 inline-flex items-center justify-center gap-2 rounded-button border border-status-danger bg-status-danger px-4 py-2.5 text-sm font-black text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                                                    :disabled="checkingSync || repairingSync || recreatingSync"
+                                                    :disabled="checkingSync || repairingSync || recreatingSync || recoveryReinstalling"
                                                     @click="openRecreateModal"
                                                 >
                                                     <RefreshCw
@@ -967,6 +1290,62 @@ onMounted(() => {
                                 <div class="flex items-center justify-between gap-3">
                                     <div>
                                         <h2 class="text-lg font-black">
+                                            Installation
+                                        </h2>
+
+                                        <p class="mt-1 text-xs text-zinc-500">
+                                            Deployment state for this Cell.
+                                        </p>
+                                    </div>
+
+                                    <Database class="size-5 text-hive" />
+                                </div>
+
+                                <div class="mt-5 space-y-3">
+                                    <div class="rounded-button border border-zinc-800 bg-[#0d0f11] p-4">
+                                        <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                            Status
+                                        </div>
+
+                                        <div class="mt-2">
+                                            <span
+                                                class="inline-flex items-center rounded-full border px-3 py-1 text-xs font-black"
+                                                :class="installStatusClass(cell.install_status)"
+                                            >
+                                                {{ cell.install_status_label || cell.install_status || 'Unknown' }}
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    <div class="rounded-button border border-zinc-800 bg-[#0d0f11] p-4">
+                                        <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                            Installed At
+                                        </div>
+
+                                        <div class="mt-2 text-sm font-black text-white">
+                                            {{ formatDate(cell.installed_at) }}
+                                        </div>
+                                    </div>
+
+                                    <div
+                                        v-if="recoveryRequired"
+                                        class="rounded-button border border-status-warning/30 bg-status-warning/10 p-4"
+                                    >
+                                        <div class="text-xs font-black uppercase tracking-wide text-status-warning">
+                                            Recovery
+                                        </div>
+
+                                        <div class="mt-2 text-sm font-black text-white">
+                                            Reinstall required
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
+                                <div class="flex items-center justify-between gap-3">
+                                    <div>
+                                        <h2 class="text-lg font-black">
                                             Resource Limits
                                         </h2>
 
@@ -1032,7 +1411,7 @@ onMounted(() => {
                                         </h2>
 
                                         <p class="mt-1 text-sm leading-6 text-zinc-400">
-                                            Permanently delete this cell and release its assigned allocation.
+                                            Permanently delete this cell and release all assigned allocations.
                                         </p>
                                     </div>
                                 </div>
@@ -1142,6 +1521,90 @@ onMounted(() => {
                             />
 
                             {{ recreatingSync ? 'Recreating...' : 'Recreate Worker Cell' }}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </Teleport>
+
+        <Teleport to="body">
+            <div
+                v-if="showRecoveryReinstallModal"
+                class="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+                @click.self="closeRecoveryReinstallModal"
+            >
+                <div class="w-full max-w-lg rounded-panel border border-status-warning/30 bg-surface p-5 shadow-2xl sm:p-6">
+                    <div class="flex items-start gap-3">
+                        <div class="flex size-11 shrink-0 items-center justify-center rounded-button border border-status-warning/30 bg-status-warning/10 text-status-warning">
+                            <RefreshCw class="size-5" />
+                        </div>
+
+                        <div>
+                            <h2 class="text-lg font-black text-white">
+                                Reinstall Recovered Cell?
+                            </h2>
+
+                            <p class="mt-1 text-sm leading-6 text-zinc-400">
+                                The Worker definition has been restored, but the Cell still needs to be installed before recovery is complete.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="mt-5 rounded-button border border-status-warning/30 bg-status-warning/10 p-4">
+                        <div class="flex items-start gap-3">
+                            <CircleAlert class="mt-0.5 size-5 shrink-0 text-status-warning" />
+
+                            <p class="text-sm leading-6 text-zinc-300">
+                                This will prepare the Worker instance directory and run the installation using the Comb and variables currently stored by HivePanel.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div
+                        v-if="recoveryReinstallError"
+                        class="mt-4 rounded-button border border-status-danger/30 bg-status-danger/10 p-4 text-sm font-bold text-status-danger"
+                    >
+                        {{ recoveryReinstallError }}
+                    </div>
+
+                    <div class="mt-5">
+                        <label class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                            Type <span class="text-white">{{ cell.name }}</span> to confirm
+                        </label>
+
+                        <input
+                            v-model="recoveryReinstallConfirmation"
+                            type="text"
+                            autocomplete="off"
+                            class="mt-2 w-full rounded-button border border-zinc-800 bg-[#0d0f11] px-4 py-3 text-sm font-bold text-white outline-none transition placeholder:text-zinc-700 focus:border-status-warning"
+                            :placeholder="cell.name"
+                            :disabled="recoveryReinstalling"
+                            @keyup.enter="recoveryReinstall"
+                        />
+                    </div>
+
+                    <div class="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                        <button
+                            type="button"
+                            class="inline-flex items-center justify-center rounded-button border border-zinc-800 bg-surface-light px-4 py-2.5 text-sm font-bold text-zinc-300 transition hover:border-zinc-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                            :disabled="recoveryReinstalling"
+                            @click="closeRecoveryReinstallModal"
+                        >
+                            Cancel
+                        </button>
+
+                        <button
+                            type="button"
+                            class="inline-flex items-center justify-center gap-2 rounded-button border border-status-warning bg-status-warning px-4 py-2.5 text-sm font-black text-black transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                            :disabled="!canConfirmRecoveryReinstall"
+                            @click="recoveryReinstall"
+                        >
+                            <RefreshCw
+                                class="size-4"
+                                :class="{ 'animate-spin': recoveryReinstalling }"
+                            />
+
+                            {{ recoveryReinstalling ? 'Queueing Reinstall...' : 'Reinstall Cell' }}
                         </button>
                     </div>
                 </div>

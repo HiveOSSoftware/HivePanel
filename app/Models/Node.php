@@ -13,33 +13,26 @@ class Node extends Model
         'name',
         'description',
         'location',
-
         'public_fqdn',
         'internal_fqdn',
         'fqdn',
-
         'scheme',
         'port',
         'daemon_port',
         'sftp_port',
         'sftp_enabled',
         'sftp_fqdn',
-
         'api_token',
-
         'behind_proxy',
         'maintenance_mode',
         'is_active',
-
         'cpu_threads',
         'memory_mib',
         'memory_overallocate',
         'disk_mib',
         'disk_overallocate',
         'max_upload_mib',
-
         'metadata',
-
         'registration_token',
         'registration_token_expires_at',
         'is_registered',
@@ -56,20 +49,16 @@ class Node extends Model
         'daemon_port' => 'integer',
         'sftp_port' => 'integer',
         'sftp_enabled' => 'boolean',
-
         'behind_proxy' => 'boolean',
         'maintenance_mode' => 'boolean',
         'is_active' => 'boolean',
-
         'cpu_threads' => 'float',
         'memory_mib' => 'integer',
         'memory_overallocate' => 'integer',
         'disk_mib' => 'integer',
         'disk_overallocate' => 'integer',
         'max_upload_mib' => 'integer',
-
         'metadata' => 'array',
-
         'registration_token_expires_at' => 'datetime',
         'is_registered' => 'boolean',
         'registered_at' => 'datetime',

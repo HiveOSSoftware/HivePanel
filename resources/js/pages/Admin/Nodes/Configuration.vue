@@ -7,6 +7,7 @@ import {
     Check,
     Clipboard,
     CpuIcon,
+    ChevronDown,
     Download,
     HardDrive,
     KeyRound,
@@ -31,6 +32,7 @@ const props = defineProps<{
 const copied = ref<string | null>(null)
 const generating = ref(false)
 const setupMode = ref<'one-click' | 'manual'>('one-click')
+const installExpanded = ref(!props.node.is_registered)
 
 const token = computed(() => props.registrationToken || null)
 
@@ -54,6 +56,7 @@ function generateToken() {
         },
     })
 }
+
 </script>
 
 <template>
@@ -127,7 +130,7 @@ function generateToken() {
                             <Link :href="`/admin/nodes/${node.id}/allocations`" class="rounded-button px-4 py-3 text-sm font-bold text-zinc-400 transition hover:bg-surface-light hover:text-white">
                                 <span class="inline-flex items-center gap-2">
                                     <HardDrive class="size-4" />
-                                    Allocation
+                                    Allocations
                                 </span>
                             </Link>
 
@@ -143,6 +146,98 @@ function generateToken() {
                     <div class="grid gap-5 xl:grid-cols-[1fr_420px]">
                         <div class="space-y-5">
                             <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
+                                <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                                    <div class="flex items-start gap-3">
+                                        <HardDrive class="mt-0.5 size-5 text-hive" />
+
+                                        <div>
+                                            <h2 class="text-lg font-black text-white">
+                                                Allocations
+                                            </h2>
+
+                                            <p class="mt-1 text-sm text-zinc-500">
+                                                Allocation addresses are managed from the dedicated Allocations page and synced to the Worker as exact IP and port entries.
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <Link
+                                        :href="`/admin/nodes/${node.id}/allocations`"
+                                        class="inline-flex items-center justify-center rounded-button border border-zinc-800 bg-[#0d0f11] px-4 py-2 text-sm font-black text-zinc-300 transition hover:border-hive hover:text-hive"
+                                    >
+                                        Manage Allocations
+                                    </Link>
+                                </div>
+
+                                <div class="mt-5 grid gap-3 sm:grid-cols-3">
+                                    <div class="rounded-button border border-zinc-800 bg-[#0d0f11] p-4">
+                                        <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                            Total
+                                        </div>
+
+                                        <div class="mt-1 text-2xl font-black text-white">
+                                            {{ node.allocation_count ?? 0 }}
+                                        </div>
+                                    </div>
+
+                                    <div class="rounded-button border border-zinc-800 bg-[#0d0f11] p-4">
+                                        <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                            Available
+                                        </div>
+
+                                        <div class="mt-1 text-2xl font-black text-status-success">
+                                            {{ node.available_allocation_count ?? 0 }}
+                                        </div>
+                                    </div>
+
+                                    <div class="rounded-button border border-zinc-800 bg-[#0d0f11] p-4">
+                                        <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                            Assigned
+                                        </div>
+
+                                        <div class="mt-1 text-2xl font-black text-hive">
+                                            {{ node.assigned_allocation_count ?? 0 }}
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <section
+                                v-if="node.is_registered"
+                                class="rounded-panel border border-status-success/30 bg-status-success/10 p-5 sm:p-6"
+                            >
+                                <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                                    <div class="flex items-start gap-3">
+                                        <ShieldCheck class="mt-0.5 size-5 text-status-success" />
+
+                                        <div>
+                                            <h2 class="text-lg font-black text-white">
+                                                Worker Installed
+                                            </h2>
+
+                                            <p class="mt-1 text-sm text-zinc-400">
+                                                This node is registered and actively configured. Installation details are hidden by default because the Worker has already connected to HivePanel.
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <button
+                                        type="button"
+                                        class="inline-flex items-center justify-center gap-2 rounded-button border border-zinc-700 bg-[#0d0f11] px-4 py-2 text-sm font-black text-zinc-300 transition hover:border-hive hover:text-hive"
+                                        @click="installExpanded = !installExpanded"
+                                    >
+                                        {{ installExpanded ? 'Hide Install Details' : 'Show Install Details' }}
+
+                                        <ChevronDown
+                                            class="size-4 transition-transform"
+                                            :class="installExpanded ? 'rotate-180' : ''"
+                                        />
+                                    </button>
+                                </div>
+                            </section>
+
+                            <template v-if="installExpanded">
+                            <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
                                 <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                                     <div class="flex items-center gap-3">
                                         <KeyRound class="size-5 text-hive" />
@@ -150,7 +245,9 @@ function generateToken() {
                                         <div>
                                             <h2 class="text-lg font-black">Registration Token</h2>
                                             <p class="mt-1 text-sm text-zinc-500">
-                                                Generate a one-time token used by the worker to register with the panel.
+                                                {{ node.is_registered
+                                                    ? 'Generate a fresh one-time token only if you are reinstalling or re-registering this Worker.'
+                                                    : 'Generate a one-time token used by the Worker to register with the panel.' }}
                                             </p>
                                         </div>
                                     </div>
@@ -161,7 +258,7 @@ function generateToken() {
                                         @click="generateToken"
                                     >
                                         <KeyRound class="size-4" />
-                                        {{ generating ? 'Generating...' : 'Generate Token' }}
+                                        {{ generating ? 'Generating...' : node.is_registered ? 'Generate New Token' : 'Generate Token' }}
                                     </button>
                                 </div>
 
@@ -193,7 +290,7 @@ function generateToken() {
                                 </div>
 
                                 <div v-else class="mt-5 rounded-button border border-zinc-800 bg-[#0d0f11] p-4 text-sm font-bold text-zinc-500">
-                                    Generate a registration token before installing the worker.
+                                    {{ node.is_registered ? 'No fresh registration token has been generated.' : 'Generate a registration token before installing the Worker.' }}
                                 </div>
                             </section>
 
@@ -338,10 +435,14 @@ function generateToken() {
                                     <pre class="max-h-[420px] overflow-auto rounded-button border border-zinc-900 bg-[#0d0f11] p-4 text-sm leading-6 text-zinc-300"><code>{{ systemdService }}</code></pre>
                                 </section>
                             </template>
+                            </template>
                         </div>
 
                         <aside class="space-y-5">
-                            <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
+                            <section
+                                v-if="installExpanded"
+                                class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6"
+                            >
                                 <div class="flex items-center gap-3">
                                     <Terminal class="size-5 text-hive" />
                                     <h2 class="text-lg font-black">Manual Commands</h2>
@@ -377,6 +478,10 @@ function generateToken() {
 
                             <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
                                 <h2 class="text-lg font-black">Node Details</h2>
+
+                                <p class="mt-1 text-sm text-zinc-500">
+                                    Runtime connection details for this Worker.
+                                </p>
 
                                 <div class="mt-5 divide-y divide-zinc-800">
                                     <div class="flex justify-between gap-4 py-3 text-sm">

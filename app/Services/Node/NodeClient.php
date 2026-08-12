@@ -14,4 +14,14 @@ class NodeClient
             ->withToken($node->api_token)
             ->timeout(10);
     }
+
+    public function updateAllocationConfiguration(Node $node, array $allocations): array
+    {
+        return $this->client($node)
+            ->patch('/configuration/allocations', [
+                'allocations' => array_values($allocations),
+            ])
+            ->throw()
+            ->json();
+    }
 }

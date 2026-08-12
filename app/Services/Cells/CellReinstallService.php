@@ -13,49 +13,33 @@ use Throwable;
 
 class CellReinstallService
 {
-    public function __construct(
-        private readonly CellNodeClient $cells,
-    ) {
+    public function __construct(private readonly CellNodeClient $cells) {
     }
 
-    public function reinstall(
-        Cell $cell,
-        Comb $comb,
-        array $variables,
-        bool $startAfterInstall = false,
-    ): Cell {
+    public function reinstall(Cell $cell, Comb $comb, array $variables, bool $startAfterInstall = false): Cell
+    {
         $cell->loadMissing([
             'node',
             'allocation',
         ]);
 
         if (! $cell->node) {
-            throw new RuntimeException(
-                'This cell is not assigned to a node.',
-            );
+            throw new RuntimeException('This cell is not assigned to a node.');
         }
 
         if (! $cell->daemon_id) {
-            throw new RuntimeException(
-                'This cell does not have a daemon ID.',
-            );
+            throw new RuntimeException('This cell does not have a daemon ID.');
         }
 
         if (! $cell->allocation) {
-            throw new RuntimeException(
-                'This cell does not have a primary allocation.',
-            );
+            throw new RuntimeException('This cell does not have a primary allocation.');
         }
 
         $metadata = $cell->metadata ?? [];
 
         $variables = [
             ...$variables,
-            'memory' => (string) data_get(
-                $metadata,
-                'limits.memory_mb',
-                1024,
-            ),
+            'memory' => (string) data_get($metadata, 'limits.memory_mb', 1024),
             'server_port' => (string) $cell->allocation->port,
             'server_ip' => $cell->allocation->ip,
         ];
@@ -65,32 +49,17 @@ class CellReinstallService
         $dockerImage = data_get(
             $combData,
             'docker.image',
-            data_get(
-                $combData,
-                'image',
-            ),
+            data_get($combData, 'image'),
         );
 
         $startupCommand = data_get(
             $combData,
             'startup.command',
-            data_get(
-                $combData,
-                'startup',
-            ),
+            data_get($combData, 'startup'),
         );
 
         try {
-            DB::transaction(function () use (
-                $cell,
-                $comb,
-                $combData,
-                $metadata,
-                $variables,
-                $dockerImage,
-                $startupCommand,
-                $startAfterInstall,
-            ): void {
+            DB::transaction(function () use ($cell, $comb, $combData, $metadata, $variables, $dockerImage, $startupCommand, $startAfterInstall): void {
                 $metadata['comb_id'] = $comb->id;
                 $metadata['comb_data'] = $combData;
                 $metadata['variables'] = $variables;
@@ -114,6 +83,8 @@ class CellReinstallService
                 ])->save();
             });
 
+            $cell->invalidateWorkerSync();
+
             $cell->refresh();
             $cell->loadMissing([
                 'node',
@@ -121,33 +92,24 @@ class CellReinstallService
             ]);
 
             /*
-             * Refresh the Worker's stored definition before
-             * destroying any existing server files.
+             * Refresh the Worker's definition before destroying
+             * the old instance data.
              */
-            $this->cells->updateCellDefinition(
-                $cell,
-            );
+            $this->cells->updateCellDefinition($cell);
 
             /*
-             * Now that Laravel and the Worker agree on the
-             * new definition, the old server files can be wiped.
+             * The Worker can now safely remove/recreate the
+             * instance directory ready for installation.
              */
-            $this->cells->prepareReinstall(
-                $cell,
-            );
+            $this->cells->prepareReinstall($cell);
 
-            InstallCellJob::dispatch(
-                $cell->id,
-                $startAfterInstall,
-            );
+            InstallCellJob::dispatch($cell->id, $startAfterInstall);
 
             return $cell->refresh();
         } catch (Throwable $exception) {
             $cell->forceFill([
                 'install_status' => CellInstallStatus::FAILED,
-                'install_failure_reason' => $this->failureMessage(
-                    $exception,
-                ),
+                'install_failure_reason' => $this->failureMessage($exception),
                 'installed_at' => null,
             ])->save();
 
@@ -155,22 +117,16 @@ class CellReinstallService
         }
     }
 
-    public function retry(
-        Cell $cell,
-        bool $startAfterInstall = false,
-    ): Cell {
+    public function retry(Cell $cell, bool $startAfterInstall = false): Cell
+    {
         $cell->loadMissing('node');
 
         if (! $cell->node) {
-            throw new RuntimeException(
-                'This cell is not assigned to a node.',
-            );
+            throw new RuntimeException('This cell is not assigned to a node.');
         }
 
         if (! $cell->daemon_id) {
-            throw new RuntimeException(
-                'This cell does not have a daemon ID.',
-            );
+            throw new RuntimeException('This cell does not have a daemon ID.');
         }
 
         $cell->forceFill([
@@ -179,29 +135,19 @@ class CellReinstallService
             'installed_at' => null,
         ])->save();
 
-        InstallCellJob::dispatch(
-            $cell->id,
-            $startAfterInstall,
-        );
+        InstallCellJob::dispatch($cell->id, $startAfterInstall);
 
         return $cell->refresh();
     }
 
-    private function failureMessage(
-        Throwable $exception,
-    ): string {
-        $message = trim(
-            $exception->getMessage(),
-        );
+    private function failureMessage(Throwable $exception): string
+    {
+        $message = trim($exception->getMessage());
 
         if ($message === '') {
             $message = 'The cell reinstall failed unexpectedly.';
         }
 
-        return mb_substr(
-            $message,
-            0,
-            5000,
-        );
+        return mb_substr($message, 0, 5000);
     }
 }
