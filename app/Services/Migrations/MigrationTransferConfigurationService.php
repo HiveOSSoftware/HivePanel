@@ -26,20 +26,85 @@ class MigrationTransferConfigurationService
 
             $current = $existing[$sourceNode] ?? [];
 
+            $protocol = strtolower(trim((string) (
+                $config['protocol']
+                ?? $current['protocol']
+                ?? 'sftp'
+            )));
+
+            if (! in_array($protocol, ['sftp', 'local'], true)) {
+                throw ValidationException::withMessages([
+                    'transfer' => "Invalid transfer method for source node {$sourceNode}.",
+                ]);
+            }
+
+            $pathTemplate = trim((string) (
+                $config['path_template']
+                ?? $current['path_template']
+                ?? '/var/lib/pterodactyl/volumes/{uuid}'
+            ));
+
+            if ($pathTemplate === '' || ! str_contains($pathTemplate, '{uuid}')) {
+                throw ValidationException::withMessages([
+                    'transfer' => "The volume path template for source node {$sourceNode} must contain {uuid}.",
+                ]);
+            }
+
+            if ($protocol === 'local') {
+                $destinationNodeIds = $migration->servers()
+                    ->where('selected', true)
+                    ->where('source_node_name', $sourceNode)
+                    ->pluck('destination_node_id')
+                    ->filter()
+                    ->unique()
+                    ->values();
+
+                if ($destinationNodeIds->count() !== 1) {
+                    throw ValidationException::withMessages([
+                        'transfer' => "In-place migration for source node {$sourceNode} requires all selected servers from that source node to map to exactly one HivePanel destination Node.",
+                    ]);
+                }
+
+                if (! (bool) ($config['same_machine_confirmed'] ?? false)) {
+                    throw ValidationException::withMessages([
+                        'transfer' => "Confirm that the mapped HivePanel Worker for {$sourceNode} is installed on the same physical machine.",
+                    ]);
+                }
+
+                if (! (bool) ($config['source_servers_stopped_confirmed'] ?? false)) {
+                    throw ValidationException::withMessages([
+                        'transfer' => "Confirm that the selected Pterodactyl servers on {$sourceNode} are stopped before using in-place migration.",
+                    ]);
+                }
+
+                $existing[$sourceNode] = [
+                    'protocol' => 'local',
+                    'host' => '',
+                    'port' => 0,
+                    'username' => '',
+                    'auth_type' => 'none',
+                    'password' => null,
+                    'private_key' => null,
+                    'private_key_passphrase' => null,
+                    'public_key' => null,
+                    'path_template' => $pathTemplate,
+                    'path_detected' => (bool) ($current['path_detected'] ?? false),
+                    'path_detected_at' => $current['path_detected_at'] ?? null,
+                    'same_machine_confirmed' => true,
+                    'source_servers_stopped_confirmed' => true,
+                    'file_strategy' => 'copy',
+                ];
+
+                continue;
+            }
+
             $authType = (string) (
                 $config['auth_type']
                 ?? $current['auth_type']
                 ?? 'password'
             );
 
-            if (! in_array(
-                $authType,
-                [
-                    'password',
-                    'private_key',
-                ],
-                true
-            )) {
+            if (! in_array($authType, ['password', 'private_key'], true)) {
                 throw ValidationException::withMessages([
                     'transfer' => "Invalid authentication type for source node {$sourceNode}.",
                 ]);
@@ -53,82 +118,46 @@ class MigrationTransferConfigurationService
                 ? (string) $config['private_key']
                 : ($current['private_key'] ?? null);
 
-            $privateKeyPassphrase = filled(
-                $config['private_key_passphrase']
-                ?? null
-            )
+            $privateKeyPassphrase = filled($config['private_key_passphrase'] ?? null)
                 ? (string) $config['private_key_passphrase']
                 : ($current['private_key_passphrase'] ?? null);
 
-            if (
-                $authType === 'password'
-                && blank($password)
-            ) {
+            if ($authType === 'password' && blank($password)) {
                 throw ValidationException::withMessages([
                     'transfer' => "A password is required for source node {$sourceNode}.",
                 ]);
             }
 
-            if (
-                $authType === 'private_key'
-                && blank($privateKey)
-            ) {
+            if ($authType === 'private_key' && blank($privateKey)) {
                 throw ValidationException::withMessages([
                     'transfer' => "An SSH private key is required for source node {$sourceNode}. Generate one or paste an existing key.",
                 ]);
             }
 
             $existing[$sourceNode] = [
-                'protocol' => $config['protocol'] ?? 'sftp',
+                'protocol' => 'sftp',
                 'host' => trim((string) ($config['host'] ?? '')),
                 'port' => (int) ($config['port'] ?? 22),
                 'username' => trim((string) ($config['username'] ?? '')),
                 'auth_type' => $authType,
-                'password' => $authType === 'password'
-                    ? $password
-                    : null,
-                'private_key' => $authType === 'private_key'
-                    ? $privateKey
-                    : null,
+                'password' => $authType === 'password' ? $password : null,
+                'private_key' => $authType === 'private_key' ? $privateKey : null,
                 'private_key_passphrase' => $authType === 'private_key'
                     ? $privateKeyPassphrase
                     : null,
                 'public_key' => $current['public_key'] ?? null,
-                'path_template' => trim(
-                    (string) (
-                        $config['path_template']
-                        ?? '/var/lib/pterodactyl/volumes/{uuid}'
-                    )
-                ),
-                'path_detected' => (
-                    isset($current['path_template'])
-                    && trim(
-                        (string) (
-                            $config['path_template']
-                            ?? ''
-                        )
-                    ) === trim(
-                        (string) $current['path_template']
-                    )
-                )
-                    ? (bool) (
-                        $current['path_detected']
-                        ?? false
-                    )
+                'path_template' => $pathTemplate,
+                'path_detected' => isset($current['path_template'])
+                    && $pathTemplate === trim((string) $current['path_template'])
+                    ? (bool) ($current['path_detected'] ?? false)
                     : false,
-                'path_detected_at' => (
-                    isset($current['path_template'])
-                    && trim(
-                        (string) (
-                            $config['path_template']
-                            ?? ''
-                        )
-                    ) === trim(
-                        (string) $current['path_template']
-                    )
-                )
+                'path_detected_at' => isset($current['path_template'])
+                    && $pathTemplate === trim((string) $current['path_template'])
                     ? ($current['path_detected_at'] ?? null)
                     : null,
+                'same_machine_confirmed' => false,
+                'source_servers_stopped_confirmed' => false,
+                'file_strategy' => 'copy',
             ];
         }
 
@@ -150,9 +179,7 @@ class MigrationTransferConfigurationService
             }
 
             try {
-                $pathTemplate = $this->detectWingsVolumePath(
-                    $config,
-                );
+                $pathTemplate = $this->detectWingsVolumePath($config);
             } catch (\Throwable $exception) {
                 report($exception);
                 continue;
@@ -162,12 +189,9 @@ class MigrationTransferConfigurationService
                 continue;
             }
 
-            $existing[$sourceNode]['path_template'] =
-                $pathTemplate;
+            $existing[$sourceNode]['path_template'] = $pathTemplate;
             $existing[$sourceNode]['path_detected'] = true;
-            $existing[$sourceNode]['path_detected_at'] = now()
-                ->toISOString();
-
+            $existing[$sourceNode]['path_detected_at'] = now()->toISOString();
             $detected[$sourceNode] = $pathTemplate;
         }
 
@@ -314,43 +338,38 @@ class MigrationTransferConfigurationService
         return collect($sourceNodes)
             ->map(function (string $sourceNode) use ($configured) {
                 $config = $configured[$sourceNode] ?? [];
+                $protocol = $config['protocol'] ?? 'sftp';
 
                 return [
                     'source_node' => $sourceNode,
-                    'protocol' => $config['protocol'] ?? 'sftp',
+                    'protocol' => $protocol,
                     'host' => $config['host'] ?? '',
                     'port' => (int) ($config['port'] ?? 22),
-                    'username' => $config['username']
-                        ?? 'hivepanel-migration',
-                    'auth_type' => $config['auth_type']
-                        ?? (
-                            filled($config['private_key'] ?? null)
-                                ? 'private_key'
-                                : 'password'
-                        ),
+                    'username' => $config['username'] ?? 'hivepanel-migration',
+                    'auth_type' => $config['auth_type'] ?? (
+                        filled($config['private_key'] ?? null)
+                            ? 'private_key'
+                            : 'password'
+                    ),
                     'path_template' => $config['path_template']
                         ?? '/var/lib/pterodactyl/volumes/{uuid}',
-                    'path_detected' => (bool) (
-                        $config['path_detected']
-                        ?? false
+                    'path_detected' => (bool) ($config['path_detected'] ?? false),
+                    'path_detected_at' => $config['path_detected_at'] ?? null,
+                    'same_machine_confirmed' => (bool) (
+                        $config['same_machine_confirmed'] ?? false
                     ),
-                    'path_detected_at' => $config['path_detected_at']
-                        ?? null,
-                    'has_password' => filled(
-                        $config['password'] ?? null
+                    'source_servers_stopped_confirmed' => (bool) (
+                        $config['source_servers_stopped_confirmed'] ?? false
                     ),
-                    'has_private_key' => filled(
-                        $config['private_key'] ?? null
-                    ),
-                    'public_key' => $config['public_key']
-                        ?? null,
-                    'setup_command' => filled(
-                        $config['public_key']
-                        ?? null
+                    'file_strategy' => $config['file_strategy'] ?? 'copy',
+                    'has_password' => filled($config['password'] ?? null),
+                    'has_private_key' => filled($config['private_key'] ?? null),
+                    'public_key' => $config['public_key'] ?? null,
+                    'setup_command' => (
+                        $protocol === 'sftp'
+                        && filled($config['public_key'] ?? null)
                     )
-                        ? $this->setupCommand(
-                            (string) $config['public_key']
-                        )
+                        ? $this->setupCommand((string) $config['public_key'])
                         : null,
                 ];
             })
@@ -375,6 +394,28 @@ class MigrationTransferConfigurationService
                 return false;
             }
 
+            $protocol = strtolower(trim((string) ($config['protocol'] ?? 'sftp')));
+            $pathTemplate = trim((string) ($config['path_template'] ?? ''));
+
+            if ($pathTemplate === '' || ! str_contains($pathTemplate, '{uuid}')) {
+                return false;
+            }
+
+            if ($protocol === 'local') {
+                if (
+                    ! (bool) ($config['same_machine_confirmed'] ?? false)
+                    || ! (bool) ($config['source_servers_stopped_confirmed'] ?? false)
+                ) {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if ($protocol !== 'sftp') {
+                return false;
+            }
+
             $authType = (string) (
                 $config['auth_type']
                 ?? (
@@ -385,19 +426,14 @@ class MigrationTransferConfigurationService
             );
 
             $hasAuth = match ($authType) {
-                'private_key' => filled(
-                    $config['private_key'] ?? null
-                ),
-                default => filled(
-                    $config['password'] ?? null
-                ),
+                'private_key' => filled($config['private_key'] ?? null),
+                default => filled($config['password'] ?? null),
             };
 
             if (
                 blank($config['host'] ?? null)
                 || blank($config['username'] ?? null)
                 || ! $hasAuth
-                || blank($config['path_template'] ?? null)
             ) {
                 return false;
             }

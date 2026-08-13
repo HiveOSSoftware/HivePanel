@@ -5,6 +5,7 @@ import {
     ArrowLeft,
     CircleAlert,
     CircleCheck,
+    Clipboard,
     Database,
     ExternalLink,
     LoaderCircle,
@@ -31,10 +32,18 @@ const serverState = ref(
 )
 
 const starting = ref(false)
+const startingDatabases = ref(false)
+const revealedDatabasePasswords = ref<Record<string, boolean>>({})
+const copiedDatabasePassword = ref<string | null>(null)
+const copiedCredential = ref<string | null>(null)
 let pollTimer: number | undefined
 
 const executionActive = computed(() =>
-    ['running'].includes(
+    [
+        'running',
+        'database_pending',
+        'database_transferring',
+    ].includes(
         migrationState.value.status
     )
 )
@@ -54,7 +63,10 @@ const completedCount = computed(() =>
 const failedCount = computed(() =>
     serverState.value.filter(
         (server) =>
-            server.status === 'failed'
+            [
+                'failed',
+                'database_failed',
+            ].includes(server.status)
     ).length
 )
 
@@ -65,6 +77,58 @@ const databasePendingCount = computed(() =>
     ).length
 )
 
+const selectedDatabaseTotal = computed(() =>
+    serverState.value.reduce(
+        (total, server) =>
+            total + selectedDatabaseCount(server),
+        0
+    )
+)
+
+const completedDatabaseCount = computed(() =>
+    serverState.value.reduce(
+        (total, server) =>
+            total + (
+                server.database_plan
+                ?? []
+            ).filter(
+                (database: any) =>
+                    database.selected
+                    && database.status === 'completed'
+            ).length,
+        0
+    )
+)
+
+const failedDatabaseCount = computed(() =>
+    serverState.value.reduce(
+        (total, server) =>
+            total + (
+                server.database_plan
+                ?? []
+            ).filter(
+                (database: any) =>
+                    database.selected
+                    && database.status === 'failed'
+            ).length,
+        0
+    )
+)
+
+const migrationFinished = computed(() =>
+    [
+        'completed',
+        'completed_with_errors',
+    ].includes(
+        migrationState.value.status
+    )
+)
+
+const canStartDatabases = computed(() =>
+    migrationState.value.status === 'database_pending'
+    && databasePendingCount.value > 0
+)
+
 const activeCount = computed(() =>
     serverState.value.filter(
         (server) =>
@@ -72,6 +136,7 @@ const activeCount = computed(() =>
                 'queued',
                 'creating_cell',
                 'transferring',
+                'database_transferring',
             ].includes(server.status)
     ).length
 )
@@ -99,6 +164,26 @@ function startMigration() {
 
             onFinish: () => {
                 starting.value = false
+            },
+        }
+    )
+}
+
+function startDatabaseMigration() {
+    startingDatabases.value = true
+
+    router.post(
+        `/admin/migrations/${migrationState.value.id}/execution/databases/start`,
+        {},
+        {
+            preserveScroll: true,
+
+            onSuccess: () => {
+                startPolling()
+            },
+
+            onFinish: () => {
+                startingDatabases.value = false
             },
         }
     )
@@ -136,10 +221,7 @@ async function pollStatus() {
                 server.selected !== false
         )
 
-        if (
-            migrationState.value.status
-            !== 'running'
-        ) {
+        if (!executionActive.value) {
             stopPolling()
         }
     } catch {
@@ -182,6 +264,12 @@ function statusLabel(status: string) {
         case 'database_pending':
             return 'Database Pending'
 
+        case 'database_transferring':
+            return 'Transferring Database'
+
+        case 'database_failed':
+            return 'Database Failed'
+
         case 'completed':
             return 'Completed'
 
@@ -202,6 +290,7 @@ function statusClass(status: string) {
             return 'border-status-success/30 bg-status-success/10 text-status-success'
 
         case 'failed':
+        case 'database_failed':
             return 'border-status-danger/30 bg-status-danger/10 text-status-danger'
 
         case 'database_pending':
@@ -210,6 +299,7 @@ function statusClass(status: string) {
         case 'queued':
         case 'creating_cell':
         case 'transferring':
+        case 'database_transferring':
             return 'border-hive/30 bg-hive/10 text-hive'
 
         default:
@@ -223,10 +313,14 @@ function statusIcon(status: string) {
             return CircleCheck
 
         case 'failed':
+        case 'database_failed':
             return CircleAlert
 
         case 'database_pending':
             return Database
+
+        case 'database_transferring':
+            return LoaderCircle
 
         case 'queued':
         case 'creating_cell':
@@ -245,6 +339,115 @@ function selectedDatabaseCount(server: any) {
         (database: any) =>
             database.selected
     ).length
+}
+
+function databaseLabel(database: any) {
+    return (
+        database?.source?.database
+        ?? database?.source?.username
+        ?? 'Database'
+    )
+}
+
+function databaseStatusClass(status: string) {
+    switch (status) {
+        case 'completed':
+            return 'text-status-success'
+
+        case 'failed':
+            return 'text-status-danger'
+
+        case 'transferring':
+            return 'text-hive'
+
+        default:
+            return 'text-zinc-500'
+    }
+}
+
+function retryDatabases(server: any) {
+    router.post(
+        `/admin/migrations/${migrationState.value.id}/execution/servers/${server.id}/databases/retry`,
+        {},
+        {
+            preserveScroll: true,
+            onSuccess: () => {
+                startPolling()
+            },
+        }
+    )
+}
+
+function databaseCredentialKey(database: any) {
+    return database?.destination?.credential_key ?? null
+}
+
+function databasePassword(server: any, database: any) {
+    const key = databaseCredentialKey(database)
+
+    if (!key) {
+        return null
+    }
+
+    return server.database_credentials?.[key]?.password ?? null
+}
+
+function databasePasswordVisible(database: any) {
+    const key = databaseCredentialKey(database)
+
+    if (!key) {
+        return false
+    }
+
+    return revealedDatabasePasswords.value[key] === true
+}
+
+function toggleDatabasePassword(database: any) {
+    const key = databaseCredentialKey(database)
+
+    if (!key) {
+        return
+    }
+
+    revealedDatabasePasswords.value[key] =
+        !revealedDatabasePasswords.value[key]
+}
+
+async function copyDatabasePassword(server: any, database: any) {
+    const key = databaseCredentialKey(database)
+    const password = databasePassword(server, database)
+
+    if (!key || !password) {
+        return
+    }
+
+    await navigator.clipboard.writeText(password)
+
+    copiedDatabasePassword.value = key
+
+    window.setTimeout(() => {
+        if (copiedDatabasePassword.value === key) {
+            copiedDatabasePassword.value = null
+        }
+    }, 1800)
+}
+
+async function copyCredentialValue(key: string, value: any) {
+    if (value === null || value === undefined || String(value) === '') {
+        return
+    }
+
+    await navigator.clipboard.writeText(
+        String(value)
+    )
+
+    copiedCredential.value = key
+
+    window.setTimeout(() => {
+        if (copiedCredential.value === key) {
+            copiedCredential.value = null
+        }
+    }, 1800)
 }
 
 onMounted(() => {
@@ -316,6 +519,17 @@ onUnmounted(() => {
                                 >
                                     <Play class="size-4" />
                                     {{ starting ? 'Queueing...' : 'Start Migration' }}
+                                </button>
+
+                                <button
+                                    v-if="canStartDatabases"
+                                    type="button"
+                                    class="inline-flex items-center gap-2 rounded-button border border-status-warning bg-status-warning px-5 py-2.5 text-sm font-black text-black transition hover:opacity-90 disabled:opacity-50"
+                                    :disabled="startingDatabases"
+                                    @click="startDatabaseMigration"
+                                >
+                                    <Database class="size-4" />
+                                    {{ startingDatabases ? 'Queueing Databases...' : 'Start Database Transfer' }}
                                 </button>
 
                                 <button
@@ -418,6 +632,73 @@ onUnmounted(() => {
                         </div>
                     </section>
 
+                    <section
+                        v-if="migrationFinished"
+                        class="rounded-panel border p-5 sm:p-6"
+                        :class="migrationState.status === 'completed'
+                            ? 'border-status-success/30 bg-status-success/5'
+                            : 'border-status-warning/30 bg-status-warning/5'"
+                    >
+                        <div class="flex items-start gap-3">
+                            <CircleCheck
+                                v-if="migrationState.status === 'completed'"
+                                class="mt-0.5 size-6 shrink-0 text-status-success"
+                            />
+
+                            <TriangleAlert
+                                v-else
+                                class="mt-0.5 size-6 shrink-0 text-status-warning"
+                            />
+
+                            <div class="min-w-0 flex-1">
+                                <h2 class="text-lg font-black text-white">
+                                    {{ migrationState.status === 'completed'
+                                        ? 'Migration Complete'
+                                        : 'Migration Completed with Errors' }}
+                                </h2>
+
+                                <p class="mt-1 text-sm leading-6 text-zinc-400">
+                                    Destination Cells and copied files are now owned by HivePanel. Pterodactyl source files are not removed automatically.
+                                </p>
+
+                                <div class="mt-4 grid gap-3 sm:grid-cols-3">
+                                    <div class="rounded-button border border-zinc-800 bg-black/20 p-4">
+                                        <div class="text-[10px] font-black uppercase tracking-wide text-zinc-600">
+                                            Cells & Files
+                                        </div>
+                                        <div class="mt-1 text-xl font-black text-status-success">
+                                            {{ completedCount }}/{{ serverState.length }}
+                                        </div>
+                                    </div>
+
+                                    <div class="rounded-button border border-zinc-800 bg-black/20 p-4">
+                                        <div class="text-[10px] font-black uppercase tracking-wide text-zinc-600">
+                                            Databases
+                                        </div>
+                                        <div
+                                            class="mt-1 text-xl font-black"
+                                            :class="failedDatabaseCount > 0 ? 'text-status-warning' : 'text-status-success'"
+                                        >
+                                            {{ completedDatabaseCount }}/{{ selectedDatabaseTotal }}
+                                        </div>
+                                    </div>
+
+                                    <div class="rounded-button border border-zinc-800 bg-black/20 p-4">
+                                        <div class="text-[10px] font-black uppercase tracking-wide text-zinc-600">
+                                            Failed
+                                        </div>
+                                        <div
+                                            class="mt-1 text-xl font-black"
+                                            :class="failedCount > 0 ? 'text-status-danger' : 'text-status-success'"
+                                        >
+                                            {{ failedCount }}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
                     <section class="overflow-hidden rounded-panel border border-zinc-800 bg-surface">
                         <div class="border-b border-zinc-800 p-5 sm:p-6">
                             <h2 class="text-lg font-black">
@@ -449,7 +730,7 @@ onUnmounted(() => {
                                                 <component
                                                     :is="statusIcon(server.status)"
                                                     class="size-3.5"
-                                                    :class="{ 'animate-spin': ['queued', 'creating_cell', 'transferring'].includes(server.status) }"
+                                                    :class="{ 'animate-spin': ['queued', 'creating_cell', 'transferring', 'database_transferring'].includes(server.status) }"
                                                 />
 
                                                 {{ statusLabel(server.status) }}
@@ -499,7 +780,7 @@ onUnmounted(() => {
                                     <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-900">
                                         <div
                                             class="h-full rounded-full transition-all duration-500"
-                                            :class="server.status === 'failed'
+                                            :class="['failed', 'database_failed'].includes(server.status)
                                                 ? 'bg-status-danger'
                                                 : server.status === 'database_pending'
                                                     ? 'bg-status-warning'
@@ -522,7 +803,165 @@ onUnmounted(() => {
                                 </div>
 
                                 <div
-                                    v-if="server.status === 'database_pending'"
+                                    v-if="selectedDatabaseCount(server) > 0"
+                                    class="mt-4 overflow-hidden rounded-button border border-zinc-800 bg-black/20"
+                                >
+                                    <div class="border-b border-zinc-800 px-4 py-3">
+                                        <div class="text-xs font-black uppercase tracking-wide text-zinc-500">
+                                            Databases
+                                        </div>
+                                    </div>
+
+                                    <div class="divide-y divide-zinc-800">
+                                        <div
+                                            v-for="(database, databaseIndex) in (server.database_plan ?? []).filter((item: any) => item.selected)"
+                                            :key="database.source?.id ?? database.source?.database ?? databaseIndex"
+                                            class="p-4"
+                                        >
+                                            <div class="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                                                <div>
+                                                    <div class="text-sm font-black text-white">
+                                                        {{ databaseLabel(database) }}
+                                                    </div>
+
+                                                    <div class="mt-1 text-xs font-bold" :class="databaseStatusClass(database.status)">
+                                                        {{ database.status || 'pending' }}
+                                                    </div>
+                                                </div>
+
+                                                <div
+                                                    v-if="database.status === 'completed' && database.destination"
+                                                    class="grid gap-x-5 gap-y-1 text-xs text-zinc-500 sm:grid-cols-2"
+                                                >
+                                                    <div class="flex items-center gap-2">
+                                                        <span>
+                                                            Host:
+                                                            <strong class="text-zinc-300">
+                                                                {{ database.destination.host }}:{{ database.destination.port }}
+                                                            </strong>
+                                                        </span>
+
+                                                        <button
+                                                            type="button"
+                                                            class="text-zinc-600 transition hover:text-hive"
+                                                            title="Copy host"
+                                                            @click="copyCredentialValue(
+                                                                `${databaseCredentialKey(database)}:host`,
+                                                                `${database.destination.host}:${database.destination.port}`
+                                                            )"
+                                                        >
+                                                            <Clipboard class="size-3.5" />
+                                                        </button>
+                                                    </div>
+
+                                                    <div class="flex items-center gap-2">
+                                                        <span>
+                                                            Database:
+                                                            <strong class="text-zinc-300">
+                                                                {{ database.destination.database }}
+                                                            </strong>
+                                                        </span>
+
+                                                        <button
+                                                            type="button"
+                                                            class="text-zinc-600 transition hover:text-hive"
+                                                            title="Copy database"
+                                                            @click="copyCredentialValue(
+                                                                `${databaseCredentialKey(database)}:database`,
+                                                                database.destination.database
+                                                            )"
+                                                        >
+                                                            <Clipboard class="size-3.5" />
+                                                        </button>
+                                                    </div>
+
+                                                    <div class="flex items-center gap-2">
+                                                        <span>
+                                                            Username:
+                                                            <strong class="text-zinc-300">
+                                                                {{ database.destination.username }}
+                                                            </strong>
+                                                        </span>
+
+                                                        <button
+                                                            type="button"
+                                                            class="text-zinc-600 transition hover:text-hive"
+                                                            title="Copy username"
+                                                            @click="copyCredentialValue(
+                                                                `${databaseCredentialKey(database)}:username`,
+                                                                database.destination.username
+                                                            )"
+                                                        >
+                                                            <Clipboard class="size-3.5" />
+                                                        </button>
+                                                    </div>
+
+                                                    <div class="sm:col-span-2">
+                                                        <div class="flex flex-wrap items-center gap-2">
+                                                            <span class="text-zinc-500">
+                                                                Password:
+                                                            </span>
+
+                                                            <code class="rounded border border-zinc-800 bg-black/30 px-2 py-1 font-mono text-zinc-300">
+                                                                {{
+                                                                    databasePasswordVisible(database)
+                                                                        ? (databasePassword(server, database) || 'Unavailable')
+                                                                        : (databasePassword(server, database) ? '••••••••••••••••' : 'Unavailable')
+                                                                }}
+                                                            </code>
+
+                                                            <button
+                                                                v-if="databasePassword(server, database)"
+                                                                type="button"
+                                                                class="rounded-button border border-zinc-800 bg-[#0d0f11] px-2.5 py-1 text-[11px] font-black text-zinc-400 transition hover:border-hive/40 hover:text-hive"
+                                                                @click="toggleDatabasePassword(database)"
+                                                            >
+                                                                {{ databasePasswordVisible(database) ? 'Hide' : 'Reveal' }}
+                                                            </button>
+
+                                                            <button
+                                                                v-if="databasePassword(server, database)"
+                                                                type="button"
+                                                                class="rounded-button border border-zinc-800 bg-[#0d0f11] px-2.5 py-1 text-[11px] font-black text-zinc-400 transition hover:border-hive/40 hover:text-hive"
+                                                                @click="copyDatabasePassword(server, database)"
+                                                            >
+                                                                {{
+                                                                    copiedDatabasePassword === databaseCredentialKey(database)
+                                                                        ? 'Copied'
+                                                                        : 'Copy'
+                                                                }}
+                                                            </button>
+                                                        </div>
+
+                                                        <p class="mt-1 text-[11px] leading-5 text-zinc-600">
+                                                            Newly generated HivePanel destination credential. Update the migrated application if it still references the old database password.
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div
+                                                v-if="database.error"
+                                                class="mt-2 text-xs font-bold leading-5 text-status-danger"
+                                            >
+                                                {{ database.error }}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <button
+                                    v-if="server.status === 'database_failed'"
+                                    type="button"
+                                    class="mt-4 inline-flex items-center gap-2 rounded-button border border-status-warning bg-status-warning px-4 py-2 text-xs font-black text-black transition hover:opacity-90"
+                                    @click="retryDatabases(server)"
+                                >
+                                    <RefreshCw class="size-3.5" />
+                                    Retry Failed Databases
+                                </button>
+
+                                <div
+                                    v-if="['database_pending', 'database_transferring'].includes(server.status)"
                                     class="mt-4 rounded-button border border-status-warning/30 bg-status-warning/10 p-3"
                                 >
                                     <div class="flex items-start gap-2">
@@ -530,11 +969,13 @@ onUnmounted(() => {
 
                                         <div>
                                             <div class="text-xs font-black text-status-warning">
-                                                File migration completed
+                                                {{ server.status === 'database_transferring' ? 'Database migration running' : 'File migration completed' }}
                                             </div>
 
                                             <p class="mt-1 text-xs leading-5 text-zinc-500">
-                                                {{ selectedDatabaseCount(server) }} selected database{{ selectedDatabaseCount(server) === 1 ? '' : 's' }} still need to be transferred by the database migration worker.
+                                                {{ server.status === 'database_transferring'
+                                                    ? 'HivePanel is exporting and importing the selected database content now.'
+                                                    : `${selectedDatabaseCount(server)} selected database${selectedDatabaseCount(server) === 1 ? '' : 's'} waiting for the database migration worker.` }}
                                             </p>
                                         </div>
                                     </div>

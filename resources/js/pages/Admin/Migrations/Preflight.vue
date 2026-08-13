@@ -9,6 +9,7 @@ import {
     Database,
     Key,
     KeyRound,
+    HardDrive,
     Network,
     Save,
     Server,
@@ -50,6 +51,9 @@ const transferForm = useForm({
                 private_key: '',
                 private_key_passphrase: '',
                 path_template: node.path_template,
+                same_machine_confirmed: node.same_machine_confirmed ?? false,
+                source_servers_stopped_confirmed: node.source_servers_stopped_confirmed ?? false,
+                file_strategy: node.file_strategy ?? 'copy',
             },
         ])
     ),
@@ -286,11 +290,11 @@ function actionClass(action: string) {
                     <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
                         <div class="flex items-center gap-2">
                             <KeyRound class="size-5 text-hive" />
-                            <h2 class="text-lg font-black">Source Node File Access</h2>
+                            <h2 class="text-lg font-black">Server File Transfer</h2>
                         </div>
 
                         <p class="mt-1 max-w-4xl text-sm text-zinc-500">
-                            Configure one SSH/SFTP or FTP account for each underlying Pterodactyl node. Do not use an individual server's Pterodactyl SFTP account. HivePanel uses this node-level account to read the selected servers' volume directories directly. The account must have read access to every selected server on this node, and the credentials remain inside the migration's encrypted source configuration.
+                            Choose how HivePanel should read each Pterodactyl node. Use In-place when the mapped HivePanel Worker is installed on the same physical machine; otherwise use Remote SFTP. In-place copies files locally and leaves the original Pterodactyl volume untouched for rollback.
                         </p>
 
                         <form
@@ -310,28 +314,33 @@ function actionClass(action: string) {
 
                                     <span
                                         class="rounded-full border px-2.5 py-1 text-xs font-black"
-                                        :class="node.has_password || node.has_private_key
-                                            ? 'border-status-success/30 bg-status-success/10 text-status-success'
-                                            : 'border-status-warning/30 bg-status-warning/10 text-status-warning'"
+                                        :class="transferForm.nodes[node.source_node].protocol === 'local'
+                                            ? (transferForm.nodes[node.source_node].same_machine_confirmed && transferForm.nodes[node.source_node].source_servers_stopped_confirmed
+                                                ? 'border-status-success/30 bg-status-success/10 text-status-success'
+                                                : 'border-status-warning/30 bg-status-warning/10 text-status-warning')
+                                            : (node.has_password || node.has_private_key
+                                                ? 'border-status-success/30 bg-status-success/10 text-status-success'
+                                                : 'border-status-warning/30 bg-status-warning/10 text-status-warning')"
                                     >
-                                        {{ node.has_password || node.has_private_key ? 'Node access saved' : 'Node access required' }}
+                                        {{ transferForm.nodes[node.source_node].protocol === 'local'
+                                            ? (transferForm.nodes[node.source_node].same_machine_confirmed && transferForm.nodes[node.source_node].source_servers_stopped_confirmed ? 'In-place configured' : 'Confirmation required')
+                                            : (node.has_password || node.has_private_key ? 'Node access saved' : 'Node access required') }}
                                     </span>
                                 </div>
 
                                 <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
                                     <div>
-                                        <label class="text-xs font-black text-zinc-500">Protocol</label>
+                                        <label class="text-xs font-black text-zinc-500">Transfer Method</label>
                                         <select
                                             v-model="transferForm.nodes[node.source_node].protocol"
                                             class="mt-1 w-full rounded-button border border-zinc-800 bg-black/30 px-3 py-2.5 text-sm font-bold text-white outline-none focus:border-hive"
                                         >
-                                            <option value="sftp">SFTP</option>
-                                            <option value="ftp">FTP</option>
-                                            <option value="ftps">FTPS</option>
+                                            <option value="local">In-place / Same Machine</option>
+                                            <option value="sftp">Remote Node / SFTP</option>
                                         </select>
                                     </div>
 
-                                    <div>
+                                    <div v-if="transferForm.nodes[node.source_node].protocol === 'sftp'">
                                         <label class="text-xs font-black text-zinc-500">Authentication</label>
                                         <select
                                             v-model="transferForm.nodes[node.source_node].auth_type"
@@ -342,7 +351,10 @@ function actionClass(action: string) {
                                         </select>
                                     </div>
 
-                                    <div class="xl:col-span-2">
+                                    <div
+                                        v-if="transferForm.nodes[node.source_node].protocol === 'sftp'"
+                                        class="xl:col-span-2"
+                                    >
                                         <label class="text-xs font-black text-zinc-500">Host</label>
                                         <input
                                             v-model="transferForm.nodes[node.source_node].host"
@@ -351,7 +363,7 @@ function actionClass(action: string) {
                                         />
                                     </div>
 
-                                    <div>
+                                    <div v-if="transferForm.nodes[node.source_node].protocol === 'sftp'">
                                         <label class="text-xs font-black text-zinc-500">Port</label>
                                         <input
                                             v-model.number="transferForm.nodes[node.source_node].port"
@@ -360,7 +372,7 @@ function actionClass(action: string) {
                                         />
                                     </div>
 
-                                    <div>
+                                    <div v-if="transferForm.nodes[node.source_node].protocol === 'sftp'">
                                         <label class="text-xs font-black text-zinc-500">Username</label>
                                         <input
                                             v-model="transferForm.nodes[node.source_node].username"
@@ -369,7 +381,7 @@ function actionClass(action: string) {
                                     </div>
 
                                     <div
-                                        v-if="transferForm.nodes[node.source_node].auth_type === 'password'"
+                                        v-if="transferForm.nodes[node.source_node].protocol === 'sftp' && transferForm.nodes[node.source_node].auth_type === 'password'"
                                     >
                                         <label class="text-xs font-black text-zinc-500">Password</label>
                                         <input
@@ -382,7 +394,7 @@ function actionClass(action: string) {
                                     </div>
 
                                     <div
-                                        v-else
+                                        v-else-if="transferForm.nodes[node.source_node].protocol === 'sftp'"
                                         class="md:col-span-2 xl:col-span-2"
                                     >
                                         <label class="text-xs font-black text-zinc-500">SSH Private Key</label>
@@ -396,7 +408,7 @@ function actionClass(action: string) {
                                     </div>
 
                                     <div
-                                        v-if="transferForm.nodes[node.source_node].auth_type === 'private_key'"
+                                        v-if="transferForm.nodes[node.source_node].protocol === 'sftp' && transferForm.nodes[node.source_node].auth_type === 'private_key'"
                                         class="md:col-span-2 xl:col-span-6 rounded-button border border-hive/20 bg-hive/5 p-4"
                                     >
                                         <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -455,8 +467,62 @@ function actionClass(action: string) {
                                         </div>
                                     </div>
 
+                                    <div
+                                        v-if="transferForm.nodes[node.source_node].protocol === 'local'"
+                                        class="md:col-span-2 xl:col-span-6 rounded-button border border-status-warning/20 bg-status-warning/5 p-4"
+                                    >
+                                        <div class="flex items-start gap-3">
+                                            <HardDrive class="mt-0.5 size-5 shrink-0 text-status-warning" />
+
+                                            <div class="min-w-0">
+                                                <div class="text-sm font-black text-white">
+                                                    In-place migration
+                                                </div>
+
+                                                <p class="mt-1 max-w-4xl text-xs leading-5 text-zinc-400">
+                                                    The mapped HivePanel Worker must be installed on the same physical machine as this Pterodactyl node. HivePanel copies the source volume directly into the new Cell without using the network. The original Pterodactyl files remain untouched for rollback.
+                                                </p>
+
+                                                <div class="mt-4 space-y-3">
+                                                    <label class="flex items-start gap-3 text-xs leading-5 text-zinc-300">
+                                                        <input
+                                                            v-model="transferForm.nodes[node.source_node].same_machine_confirmed"
+                                                            type="checkbox"
+                                                            class="mt-1 size-4 rounded border-zinc-700 bg-black/30"
+                                                        />
+
+                                                        <span>
+                                                            I confirm the mapped HivePanel Worker is installed on the same machine as this Pterodactyl node.
+                                                        </span>
+                                                    </label>
+
+                                                    <label class="flex items-start gap-3 text-xs leading-5 text-zinc-300">
+                                                        <input
+                                                            v-model="transferForm.nodes[node.source_node].source_servers_stopped_confirmed"
+                                                            type="checkbox"
+                                                            class="mt-1 size-4 rounded border-zinc-700 bg-black/30"
+                                                        />
+
+                                                        <span>
+                                                            I have stopped the selected servers in Pterodactyl and will keep them stopped during cutover.
+                                                        </span>
+                                                    </label>
+                                                </div>
+
+                                                <div class="mt-4 rounded-button border border-zinc-800 bg-black/20 p-3 text-xs leading-5 text-zinc-500">
+                                                    <strong class="text-zinc-300">File strategy:</strong>
+                                                    Copy source files and keep the original Pterodactyl volume unchanged. This is slower than a move for very large servers, but provides a clean rollback path.
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
                                     <div class="md:col-span-2 xl:col-span-6">
-                                        <label class="text-xs font-black text-zinc-500">Pterodactyl Volume Path Template</label>
+                                        <label class="text-xs font-black text-zinc-500">
+                                            {{ transferForm.nodes[node.source_node].protocol === 'local'
+                                                ? 'Local Pterodactyl Volume Path Template'
+                                                : 'Pterodactyl Volume Path Template' }}
+                                        </label>
                                         <input
                                             v-model="transferForm.nodes[node.source_node].path_template"
                                             class="mt-1 w-full rounded-button border border-zinc-800 bg-black/30 px-3 py-2.5 font-mono text-sm font-bold text-white outline-none focus:border-hive"
@@ -465,11 +531,13 @@ function actionClass(action: string) {
 
                                         <div class="mt-1 flex flex-wrap items-center gap-2">
                                             <p class="text-xs text-zinc-600">
-                                                Path to server data on the underlying source node. Use <code>{uuid}</code> where the Pterodactyl server UUID should be inserted.
+                                                {{ transferForm.nodes[node.source_node].protocol === 'local'
+                                                    ? 'Absolute path visible to the HivePanel Worker. Use {uuid} where the Pterodactyl server UUID should be inserted.'
+                                                    : 'Path to server data on the underlying source node. Use {uuid} where the Pterodactyl server UUID should be inserted.' }}
                                             </p>
 
                                             <span
-                                                v-if="node.path_detected"
+                                                v-if="node.path_detected && transferForm.nodes[node.source_node].protocol === 'sftp'"
                                                 class="inline-flex items-center gap-1 rounded-full border border-status-success/30 bg-status-success/10 px-2 py-0.5 text-[10px] font-black text-status-success"
                                             >
                                                 <CircleCheck class="size-3" />
@@ -493,7 +561,7 @@ function actionClass(action: string) {
                                 :disabled="transferForm.processing"
                             >
                                 <Save class="size-4" />
-                                {{ transferForm.processing ? 'Testing...' : 'Test & Save Node Access' }}
+                                {{ transferForm.processing ? 'Saving...' : 'Save Transfer Configuration' }}
                             </button>
                         </form>
                     </section>

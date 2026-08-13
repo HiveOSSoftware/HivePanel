@@ -183,8 +183,12 @@ class CellSyncService
             'comb_data' => $payload['comb_data'] ?? [],
             'variables' => $payload['variables'] ?? [],
             'allocation' => $payload['allocation'] ?? null,
-            'additional_allocations' => $this->normaliseAllocations($payload['additional_allocations'] ?? []),
-            'limits' => $payload['limits'] ?? [],
+            'additional_allocations' => $this->normaliseAllocations(
+                $payload['additional_allocations'] ?? []
+            ),
+            'limits' => $this->normaliseLimits(
+                $payload['limits'] ?? []
+            ),
         ]);
     }
 
@@ -196,9 +200,59 @@ class CellSyncService
             'comb_data' => $worker['comb_data'] ?? [],
             'variables' => $worker['variables'] ?? [],
             'allocation' => $worker['allocation'] ?? null,
-            'additional_allocations' => $this->normaliseAllocations($worker['additional_allocations'] ?? []),
-            'limits' => $worker['limits'] ?? [],
+            'additional_allocations' => $this->normaliseAllocations(
+                $worker['additional_allocations'] ?? []
+            ),
+            'limits' => $this->normaliseLimits(
+                $worker['limits'] ?? []
+            ),
         ]);
+    }
+
+    private function normaliseLimits(array $limits): array
+    {
+        $cpuPinning = trim(
+            (string) (
+                $limits['cpu_pinning']
+                ?? ''
+            )
+        );
+
+        return [
+            'memory_mb' => (int) (
+                $limits['memory_mb']
+                ?? 1024
+            ),
+            'overhead_memory_mb' => (int) (
+                $limits['overhead_memory_mb']
+                ?? 0
+            ),
+            'swap_mb' => (int) (
+                $limits['swap_mb']
+                ?? 0
+            ),
+            'disk_mb' => (int) (
+                $limits['disk_mb']
+                ?? 0
+            ),
+            'cpu_percent' => (int) (
+                $limits['cpu_percent']
+                ?? 0
+            ),
+            'cpu_pinning' => $cpuPinning !== ''
+                ? $cpuPinning
+                : null,
+            'io_weight' => (int) (
+                $limits['io_weight']
+                ?? 500
+            ),
+            'oom_killer' => array_key_exists(
+                'oom_killer',
+                $limits
+            )
+                ? (bool) $limits['oom_killer']
+                : true,
+        ];
     }
 
     private function normaliseAllocations(array $allocations): array

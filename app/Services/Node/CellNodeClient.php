@@ -162,6 +162,25 @@ class CellNodeClient
             ->values()
             ->all();
 
+        $limits = (array) $cell->limits;
+        $featureLimits = (array) data_get(
+            $cell->metadata,
+            'feature_limits',
+            []
+        );
+
+        $docker = (array) data_get(
+            $cell->metadata,
+            'docker',
+            []
+        );
+
+        $startup = (array) data_get(
+            $cell->metadata,
+            'startup',
+            []
+        );
+
         return [
             'name' => $cell->name,
             'comb' => $cell->comb,
@@ -176,9 +195,85 @@ class CellNodeClient
             'additional_allocations' => $additionalAllocations,
 
             'limits' => [
-                'memory_mb' => (int) data_get($cell->limits, 'memory_mb', 1024),
-                'cpu_percent' => (int) data_get($cell->limits, 'cpu_percent', 100),
-                'disk_mb' => (int) data_get($cell->limits, 'disk_mb', 0),
+                'memory_mb' => (int) data_get(
+                    $limits,
+                    'memory_mb',
+                    1024
+                ),
+                'overhead_memory_mb' => (int) data_get(
+                    $limits,
+                    'overhead_memory_mb',
+                    0
+                ),
+                'swap_mb' => (int) data_get(
+                    $limits,
+                    'swap_mb',
+                    0
+                ),
+                'disk_mb' => (int) data_get(
+                    $limits,
+                    'disk_mb',
+                    0
+                ),
+                'cpu_percent' => (int) data_get(
+                    $limits,
+                    'cpu_percent',
+                    0
+                ),
+                'cpu_pinning' => filled(
+                    data_get(
+                        $limits,
+                        'cpu_pinning'
+                    )
+                )
+                    ? (string) data_get(
+                        $limits,
+                        'cpu_pinning'
+                    )
+                    : null,
+                'io_weight' => (int) data_get(
+                    $limits,
+                    'io_weight',
+                    500
+                ),
+                'oom_killer' => (bool) data_get(
+                    $limits,
+                    'oom_killer',
+                    true
+                ),
+            ],
+
+            'feature_limits' => [
+                'database_limit' => data_get(
+                    $featureLimits,
+                    'database_limit'
+                ),
+                'allocation_limit' => data_get(
+                    $featureLimits,
+                    'allocation_limit'
+                ),
+                'backup_limit' => data_get(
+                    $featureLimits,
+                    'backup_limit'
+                ),
+                'backup_storage_mb' => data_get(
+                    $featureLimits,
+                    'backup_storage_mb'
+                ),
+            ],
+
+            'docker' => [
+                'image' => data_get(
+                    $docker,
+                    'image'
+                ),
+            ],
+
+            'startup' => [
+                'command' => data_get(
+                    $startup,
+                    'command'
+                ),
             ],
         ];
     }

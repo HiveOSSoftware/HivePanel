@@ -71,6 +71,14 @@ class MonitorPlatformServerImport implements ShouldQueue
                 )->delay(
                     now()->addSeconds(5)
                 );
+
+                return;
+            }
+
+            if ($result === 'database_pending') {
+                MigratePlatformServerDatabases::dispatch(
+                    $server->id,
+                );
             }
         } catch (Throwable $exception) {
             report($exception);

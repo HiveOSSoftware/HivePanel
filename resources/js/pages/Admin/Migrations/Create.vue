@@ -37,7 +37,7 @@ function submit() {
 
         <div class="min-h-screen bg-surface-dark text-white">
             <main class="px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
-                <div class="mx-auto max-w-4xl space-y-5">
+                <div class="mx-auto space-y-5">
                     <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
                         <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                             <div class="flex items-center gap-3">
@@ -78,7 +78,14 @@ function submit() {
                                     <option value="pterodactyl">
                                         Pterodactyl
                                     </option>
+                                    <option value="pterodactyl_fork">
+                                        Pterodactyl Fork
+                                    </option>
                                 </select>
+
+                                <p class="mt-2 text-xs leading-5 text-zinc-500">
+                                    Use Pterodactyl Fork for panels based on or compatible with Pterodactyl. HivePanel will use the compatible Application API and migration flow where supported.
+                                </p>
                             </div>
 
                             <div>
@@ -149,7 +156,7 @@ function submit() {
                                                 </div>
 
                                                 <p class="mt-1 text-xs leading-5 text-zinc-500">
-                                                    Optional read-only access to the Pterodactyl panel database enables password-hash preservation and server database discovery.
+                                                    Optional read-only access to the source panel database enables password-hash preservation and server database discovery.
                                                 </p>
                                             </div>
 

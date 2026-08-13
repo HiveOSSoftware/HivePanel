@@ -6,6 +6,7 @@ use App\Models\PlatformMigration;
 use App\Models\PlatformMigrationServer;
 use App\Services\Migrations\Contracts\MigrationSourceConnector;
 use App\Services\Migrations\Sources\PterodactylDatabaseSource;
+use App\Services\Migrations\Sources\PterodactylForkSourceConnector;
 use App\Services\Migrations\Sources\PterodactylSourceConnector;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
@@ -19,6 +20,10 @@ class MigrationDiscoveryService
 
         return match ($migration->source_type) {
             'pterodactyl' => new PterodactylSourceConnector(
+                panelUrl: (string) ($config['panel_url'] ?? ''),
+                apiKey: (string) ($config['api_key'] ?? ''),
+            ),
+            'pterodactyl_fork' => new PterodactylForkSourceConnector(
                 panelUrl: (string) ($config['panel_url'] ?? ''),
                 apiKey: (string) ($config['api_key'] ?? ''),
             ),
@@ -62,7 +67,7 @@ class MigrationDiscoveryService
                 false,
             )) {
                 $migration->forceFill([
-                    'current_stage' => 'Reading Pterodactyl database metadata',
+                    'current_stage' => 'Reading source database metadata',
                     'progress' => 65,
                 ])->save();
 
@@ -104,11 +109,9 @@ class MigrationDiscoveryService
                     $sourceIds[] = $data['source_server_id'];
 
                     $sourceMetadata = $data['source_metadata'] ?? [];
-
                     $sourceMetadata['databases'] = $serverDatabases[
                         (string) $data['source_server_id']
                     ] ?? [];
-
                     $data['source_metadata'] = $sourceMetadata;
 
                     PlatformMigrationServer::updateOrCreate(
@@ -175,5 +178,4 @@ class MigrationDiscoveryService
             password: (string) ($config['password'] ?? ''),
         );
     }
-
 }

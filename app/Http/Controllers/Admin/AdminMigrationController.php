@@ -5,12 +5,14 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Jobs\Migrations\DiscoverPlatformMigration;
 use App\Jobs\Migrations\ExecutePlatformMigration;
+use App\Jobs\Migrations\MigratePlatformServerDatabases;
 use App\Models\Comb;
 use App\Models\Node;
 use App\Models\PlatformMigration;
 use App\Models\PlatformMigrationServer;
 use App\Models\User;
 use App\Services\Migrations\MigrationDatabaseTransferConfigurationService;
+use App\Services\Migrations\MigrationDatabaseTransferService;
 use App\Services\Migrations\MigrationDiscoveryService;
 use App\Services\Migrations\MigrationPlanningService;
 use App\Services\Migrations\MigrationPreparationService;
@@ -51,7 +53,7 @@ class AdminMigrationController extends Controller
     public function store(Request $request)
     {
         $data = $request->validate([
-            'source_type' => ['required', 'string', 'in:pterodactyl'],
+            'source_type' => ['required', 'string', 'in:pterodactyl,pterodactyl_fork'],
             'name' => ['required', 'string', 'max:150'],
             'panel_url' => ['required', 'url', 'max:500'],
             'api_key' => ['required', 'string', 'max:1000'],
@@ -98,6 +100,56 @@ class AdminMigrationController extends Controller
 
     public function show(PlatformMigration $migration)
     {
+        if ($migration->status === 'mapped') {
+            return redirect()->route(
+                'admin.migrations.review',
+                $migration,
+            );
+        }
+
+        if (in_array(
+            $migration->status,
+            [
+                'preflight_ready',
+                'preflight_blocked',
+            ],
+            true
+        )) {
+            return redirect()->route(
+                'admin.migrations.preflight',
+                $migration,
+            );
+        }
+
+        if (in_array(
+            $migration->status,
+            [
+                'execution_ready',
+                'running',
+                'database_pending',
+                'database_transferring',
+                'database_failed',
+                'completed',
+                'completed_with_errors',
+            ],
+            true
+        )) {
+            return redirect()->route(
+                'admin.migrations.execution',
+                $migration,
+            );
+        }
+
+        if (
+            $migration->status === 'failed'
+            && $this->hasReachedExecution($migration)
+        ) {
+            return redirect()->route(
+                'admin.migrations.execution',
+                $migration,
+            );
+        }
+
         $migration->load([
             'servers' => fn ($query) => $query
                 ->orderBy('source_node_name')
@@ -883,26 +935,30 @@ class AdminMigrationController extends Controller
             'nodes.*.protocol' => [
                 'required',
                 'string',
-                'in:sftp,ftp,ftps',
+                'in:sftp,local',
             ],
             'nodes.*.host' => [
-                'required',
+                'nullable',
+                'required_if:nodes.*.protocol,sftp',
                 'string',
                 'max:255',
             ],
             'nodes.*.port' => [
-                'required',
+                'nullable',
+                'required_if:nodes.*.protocol,sftp',
                 'integer',
                 'min:1',
                 'max:65535',
             ],
             'nodes.*.username' => [
-                'required',
+                'nullable',
+                'required_if:nodes.*.protocol,sftp',
                 'string',
                 'max:255',
             ],
             'nodes.*.auth_type' => [
-                'required',
+                'nullable',
+                'required_if:nodes.*.protocol,sftp',
                 'string',
                 'in:password,private_key',
             ],
@@ -925,6 +981,19 @@ class AdminMigrationController extends Controller
                 'required',
                 'string',
                 'max:1500',
+            ],
+            'nodes.*.same_machine_confirmed' => [
+                'nullable',
+                'boolean',
+            ],
+            'nodes.*.source_servers_stopped_confirmed' => [
+                'nullable',
+                'boolean',
+            ],
+            'nodes.*.file_strategy' => [
+                'nullable',
+                'string',
+                'in:copy',
             ],
         ]);
 
@@ -1123,8 +1192,8 @@ class AdminMigrationController extends Controller
         return back()->with(
             'success',
             (bool) $data['enabled']
-                ? 'Pterodactyl database connection saved and verified.'
-                : 'Pterodactyl database enhancement disabled.'
+                ? 'Source database connection saved and verified.'
+                : 'Source database enhancement disabled.'
         );
     }
 
@@ -1204,6 +1273,8 @@ class AdminMigrationController extends Controller
                     'execution_ready',
                     'running',
                     'database_pending',
+                    'database_transferring',
+                    'database_failed',
                     'completed',
                     'completed_with_errors',
                     'failed',
@@ -1239,6 +1310,12 @@ class AdminMigrationController extends Controller
                         ...$this->migrationServerPayload(
                             $server,
                         ),
+
+                        'database_credentials' =>
+                            $this->databaseCredentialsForServer(
+                                $migration,
+                                $server,
+                            ),
 
                         'destination_cell' =>
                             $server->destinationCell
@@ -1312,6 +1389,89 @@ class AdminMigrationController extends Controller
                 'success',
                 'Migration execution has been queued.'
             );
+    }
+
+    public function startDatabaseExecution(
+        PlatformMigration $migration,
+    ) {
+        abort_unless(
+            $migration->status === 'database_pending',
+            422,
+            'This migration is not waiting for database transfer.'
+        );
+
+        $servers = $migration->servers()
+            ->where('selected', true)
+            ->where('status', 'database_pending')
+            ->get();
+
+        abort_unless(
+            $servers->isNotEmpty(),
+            422,
+            'No servers are waiting for database transfer.'
+        );
+
+        foreach ($servers as $server) {
+            MigratePlatformServerDatabases::dispatch(
+                $server->id,
+            );
+        }
+
+        return back()->with(
+            'success',
+            'Database migration has been queued.'
+        );
+    }
+
+    public function retryDatabases(
+        PlatformMigration $migration,
+        PlatformMigrationServer $server,
+        MigrationDatabaseTransferService $databases,
+    ) {
+        abort_unless(
+            (string) $server->platform_migration_id
+                === (string) $migration->id,
+            404,
+        );
+
+        abort_unless(
+            $server->status === 'database_failed',
+            422,
+            'This server does not have failed databases to retry.'
+        );
+
+        $reset = $databases->resetFailedDatabases(
+            $server,
+        );
+
+        abort_unless(
+            $reset > 0,
+            422,
+            'No failed databases were found.'
+        );
+
+        $migration->forceFill([
+            'status' => 'database_pending',
+            'current_stage' =>
+                "{$reset} database retry/retries queued",
+            'progress' => min(
+                99,
+                max(
+                    85,
+                    (int) $migration->progress,
+                ),
+            ),
+            'error' => null,
+        ])->save();
+
+        MigratePlatformServerDatabases::dispatch(
+            $server->id,
+        );
+
+        return back()->with(
+            'success',
+            "Queued {$reset} failed database(s) for retry."
+        );
     }
 
     public function updateSource(
@@ -1432,9 +1592,14 @@ class AdminMigrationController extends Controller
     private function serverPayload(PlatformMigration $migration)
     {
         return $migration->servers
-            ->map(fn (PlatformMigrationServer $server) =>
-                $this->migrationServerPayload($server)
-            )
+            ->map(fn (PlatformMigrationServer $server) => [
+                ...$this->migrationServerPayload($server),
+                'database_credentials' =>
+                    $this->databaseCredentialsForServer(
+                        $migration,
+                        $server,
+                    ),
+            ])
             ->values();
     }
 
@@ -1477,6 +1642,70 @@ class AdminMigrationController extends Controller
             'error' => $server->error,
             'prepared_at' => $server->prepared_at?->toISOString(),
         ];
+    }
+
+    private function hasReachedExecution(
+        PlatformMigration $migration,
+    ): bool {
+        return $migration->servers()
+            ->where(function ($query) {
+                $query
+                    ->whereNotNull(
+                        'destination_cell_id'
+                    )
+                    ->orWhereNotNull(
+                        'prepared_at'
+                    )
+                    ->orWhereIn(
+                        'status',
+                        [
+                            'prepared',
+                            'queued',
+                            'creating_cell',
+                            'transferring',
+                            'database_pending',
+                            'database_transferring',
+                            'database_failed',
+                            'completed',
+                        ],
+                    );
+            })
+            ->exists();
+    }
+
+    private function databaseCredentialsForServer(
+        PlatformMigration $migration,
+        PlatformMigrationServer $server,
+    ): array {
+        $credentials = (array) data_get(
+            $migration->execution_config,
+            'database_credentials',
+            [],
+        );
+
+        $prefix = $server->id . ':';
+
+        return collect($credentials)
+            ->filter(
+                fn ($value, $key) =>
+                    str_starts_with(
+                        (string) $key,
+                        $prefix,
+                    )
+            )
+            ->map(
+                fn ($value) => [
+                    'password' => data_get(
+                        $value,
+                        'password',
+                    ),
+                    'created_at' => data_get(
+                        $value,
+                        'created_at',
+                    ),
+                ]
+            )
+            ->all();
     }
 
     private function suggestCombExternalId(

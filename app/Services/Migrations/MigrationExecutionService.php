@@ -291,6 +291,22 @@ class MigrationExecutionService
                 'Complete',
             ) === 0
         ) {
+            $server->loadMissing(
+                'destinationCell'
+            );
+
+            if (! $server->destinationCell) {
+                throw new RuntimeException(
+                    'File transfer completed, but the destination Cell could not be resolved.'
+                );
+            }
+
+            $server->destinationCell->forceFill([
+                'install_status' => 'installed',
+                'install_failure_reason' => null,
+                'installed_at' => now(),
+            ])->save();
+
             $selectedDatabases = collect(
                 $server->database_plan
                 ?? []
@@ -382,7 +398,13 @@ class MigrationExecutionService
             ->count();
 
         $failed = $servers
-            ->where('status', 'failed')
+            ->whereIn(
+                'status',
+                [
+                    'failed',
+                    'database_failed',
+                ],
+            )
             ->count();
 
         $databasePending = $servers
@@ -396,6 +418,7 @@ class MigrationExecutionService
                     'queued',
                     'creating_cell',
                     'transferring',
+                    'database_transferring',
                 ],
                 true
             )
@@ -483,18 +506,14 @@ class MigrationExecutionService
             );
         }
 
-        $protocol = strtolower(
-            trim(
-                (string) (
-                    $config['protocol']
-                    ?? 'sftp'
-                )
-            )
-        );
+        $protocol = strtolower(trim((string) (
+            $config['protocol']
+            ?? 'sftp'
+        )));
 
-        if ($protocol !== 'sftp') {
+        if (! in_array($protocol, ['sftp', 'local'], true)) {
             throw new RuntimeException(
-                'The Worker currently supports SFTP imports only.'
+                'The Worker currently supports remote SFTP and in-place local imports only.'
             );
         }
 
@@ -511,32 +530,39 @@ class MigrationExecutionService
 
         if (
             $remotePath === ''
-            || str_contains(
-                $remotePath,
-                '{uuid}',
-            )
+            || str_contains($remotePath, '{uuid}')
         ) {
             throw new RuntimeException(
                 "The source path template for {$sourceNode} could not be resolved."
             );
         }
 
-        $this->importer->startImporter(
-            $server->destinationCell,
-            [
-                'protocol' => 'sftp',
-                'host' => (string) (
-                    $config['host']
-                    ?? ''
-                ),
-                'port' => (int) (
-                    $config['port']
-                    ?? 22
-                ),
-                'username' => (string) (
-                    $config['username']
-                    ?? ''
-                ),
+        $payload = [
+            'protocol' => $protocol,
+            'host' => '',
+            'port' => 0,
+            'username' => '',
+            'auth_type' => '',
+            'password' => '',
+            'private_key' => '',
+            'private_key_passphrase' => '',
+            'remote_path' => $remotePath,
+            'options' => [
+                'importWorlds' => true,
+                'importPlugins' => true,
+                'importConfigs' => true,
+                'importMods' => true,
+                'importServerJar' => true,
+                'wipeBeforeImport' => false,
+            ],
+        ];
+
+        if ($protocol === 'sftp') {
+            $payload = [
+                ...$payload,
+                'host' => (string) ($config['host'] ?? ''),
+                'port' => (int) ($config['port'] ?? 22),
+                'username' => (string) ($config['username'] ?? ''),
                 'auth_type' => (string) (
                     $config['auth_type']
                     ?? (
@@ -545,33 +571,25 @@ class MigrationExecutionService
                             : 'password'
                     )
                 ),
-                'password' => (string) (
-                    $config['password']
-                    ?? ''
-                ),
-                'private_key' => (string) (
-                    $config['private_key']
-                    ?? ''
-                ),
+                'password' => (string) ($config['password'] ?? ''),
+                'private_key' => (string) ($config['private_key'] ?? ''),
                 'private_key_passphrase' => (string) (
                     $config['private_key_passphrase']
                     ?? ''
                 ),
-                'remote_path' => $remotePath,
-                'options' => [
-                    'importWorlds' => true,
-                    'importPlugins' => true,
-                    'importConfigs' => true,
-                    'importMods' => true,
-                    'importServerJar' => true,
-                    'wipeBeforeImport' => false,
-                ],
-            ],
+            ];
+        }
+
+        $this->importer->startImporter(
+            $server->destinationCell,
+            $payload,
         );
 
         $server->forceFill([
             'status' => 'transferring',
-            'current_stage' => 'File transfer started',
+            'current_stage' => $protocol === 'local'
+                ? 'Local file copy started'
+                : 'File transfer started',
             'progress' => 10,
             'error' => null,
         ])->save();

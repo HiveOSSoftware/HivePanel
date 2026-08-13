@@ -148,7 +148,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
             Route::get('/{migration}/execution', [AdminMigrationController::class, 'execution'])->name('execution');
             Route::post('/{migration}/execution/start', [AdminMigrationController::class, 'startExecution'])->name('execution.start');
-
+            Route::post('/{migration}/execution/databases/start', [AdminMigrationController::class, 'startDatabaseExecution'])->name('execution.databases.start');
+            Route::post('/{migration}/execution/servers/{server}/databases/retry', [AdminMigrationController::class, 'retryDatabases'])->name('execution.databases.retry');
+            
             Route::delete('/{migration}', [AdminMigrationController::class, 'destroy'])->name('destroy');
         });
 
