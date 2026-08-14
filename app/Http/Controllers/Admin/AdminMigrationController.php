@@ -30,12 +30,43 @@ class AdminMigrationController extends Controller
 {
     public function index()
     {
-        return Inertia::render('Admin/Migrations/Index', [
-            'migrations' => PlatformMigration::query()
-                ->withCount('servers')
-                ->latest()
-                ->get()
-                ->map(fn (PlatformMigration $migration) => [
+        $migrations = PlatformMigration::query()
+            ->with([
+                'servers:id,platform_migration_id,selected,status,database_plan,destination_cell_id',
+            ])
+            ->latest()
+            ->get()
+            ->map(function (PlatformMigration $migration) {
+                $selectedServers = $migration->servers
+                    ->where('selected', true)
+                    ->values();
+
+                $databasePlans = $selectedServers
+                    ->flatMap(
+                        fn (PlatformMigrationServer $server) =>
+                            collect(
+                                $server->database_plan
+                                ?? []
+                            )->where(
+                                'selected',
+                                true
+                            )
+                    )
+                    ->values();
+
+                $verification = (array) data_get(
+                    $migration->source_config,
+                    'verification',
+                    [],
+                );
+
+                $finalisation = (array) data_get(
+                    $migration->source_config,
+                    'finalisation',
+                    [],
+                );
+
+                return [
                     'id' => $migration->id,
                     'name' => $migration->name,
                     'source_type' => $migration->source_type,
@@ -43,14 +74,83 @@ class AdminMigrationController extends Controller
                         $migration->source_type
                     ),
                     'status' => $migration->status,
+                    'status_label' => $this->migrationStatusLabel(
+                        $migration->status
+                    ),
                     'current_stage' => $migration->current_stage,
                     'progress' => $migration->progress,
                     'error' => $migration->error,
-                    'servers_count' => $migration->servers_count,
+                    'servers_count' => $migration->servers->count(),
+                    'selected_servers_count' => $selectedServers->count(),
+                    'completed_servers_count' => $selectedServers
+                        ->where('status', 'completed')
+                        ->count(),
+                    'failed_servers_count' => $selectedServers
+                        ->filter(
+                            fn (PlatformMigrationServer $server) =>
+                                in_array(
+                                    $server->status,
+                                    [
+                                        'failed',
+                                        'database_failed',
+                                    ],
+                                    true
+                                )
+                        )
+                        ->count(),
+                    'database_count' => $databasePlans->count(),
+                    'completed_database_count' => $databasePlans
+                        ->where('status', 'completed')
+                        ->count(),
+                    'lifecycle_step' => $this->migrationLifecycleStep(
+                        $migration
+                    ),
+                    'verification' => [
+                        'verified' => (bool) (
+                            $verification['verified']
+                            ?? false
+                        ),
+                        'checked_at' =>
+                            $verification['checked_at']
+                            ?? null,
+                        'failed' => (int) data_get(
+                            $verification,
+                            'summary.failed',
+                            0,
+                        ),
+                        'warnings' => (int) data_get(
+                            $verification,
+                            'summary.warnings',
+                            0,
+                        ),
+                    ],
+                    'finalisation' => [
+                        'finalised' => (bool) (
+                            $finalisation['finalised']
+                            ?? false
+                        ),
+                        'finalised_at' =>
+                            $finalisation['finalised_at']
+                            ?? null,
+                        'credentials_removed' => (bool) (
+                            $finalisation[
+                                'credentials_removed'
+                            ]
+                            ?? false
+                        ),
+                    ],
                     'discovered_at' => $migration->discovered_at?->toISOString(),
                     'created_at' => $migration->created_at?->toISOString(),
-                ]),
-        ]);
+                    'updated_at' => $migration->updated_at?->toISOString(),
+                ];
+            });
+
+        return Inertia::render(
+            'Admin/Migrations/Index',
+            [
+                'migrations' => $migrations,
+            ]
+        );
     }
 
     public function create()
@@ -139,6 +239,9 @@ class AdminMigrationController extends Controller
                 'database_failed',
                 'completed',
                 'completed_with_errors',
+                'verified',
+                'verification_failed',
+                'finalised',
             ],
             true
         )) {
@@ -1824,6 +1927,94 @@ class AdminMigrationController extends Controller
         return redirect()
             ->route('admin.migrations.index')
             ->with('success', 'Migration removed successfully.');
+    }
+
+    private function migrationStatusLabel(
+        string $status,
+    ): string {
+        return match ($status) {
+            'queued' => 'Queued',
+            'discovering' => 'Discovering',
+            'ready' => 'Ready to Map',
+            'mapped' => 'Mapped',
+            'preflight_ready' => 'Preflight Ready',
+            'preflight_blocked' => 'Preflight Blocked',
+            'execution_ready' => 'Ready to Execute',
+            'running' => 'Migrating',
+            'database_pending' => 'Database Pending',
+            'database_transferring' => 'Database Transfer',
+            'database_failed' => 'Database Failed',
+            'completed' => 'Completed',
+            'completed_with_errors' => 'Completed with Errors',
+            'verified' => 'Verified',
+            'verification_failed' => 'Verification Failed',
+            'finalised' => 'Finalised',
+            'failed' => 'Failed',
+            default => Str::of($status)
+                ->replace('_', ' ')
+                ->title()
+                ->toString(),
+        };
+    }
+
+    private function migrationLifecycleStep(
+        PlatformMigration $migration,
+    ): int {
+        if ($migration->status === 'finalised') {
+            return 5;
+        }
+
+        if (in_array(
+            $migration->status,
+            [
+                'verified',
+                'verification_failed',
+            ],
+            true
+        )) {
+            return 4;
+        }
+
+        if (
+            in_array(
+                $migration->status,
+                [
+                    'execution_ready',
+                    'running',
+                    'database_pending',
+                    'database_transferring',
+                    'database_failed',
+                    'completed',
+                    'completed_with_errors',
+                ],
+                true
+            )
+            || (
+                $migration->status === 'failed'
+                && $this->hasReachedExecution(
+                    $migration
+                )
+            )
+        ) {
+            return 3;
+        }
+
+        if (in_array(
+            $migration->status,
+            [
+                'preflight_ready',
+                'preflight_blocked',
+            ],
+            true
+        )) {
+            return 2;
+        }
+
+        if ($migration->status === 'mapped') {
+            return 1;
+        }
+
+        return 0;
     }
 
     private function sourceTypeLabel(string $sourceType): string

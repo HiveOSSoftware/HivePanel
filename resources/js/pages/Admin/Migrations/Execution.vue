@@ -85,6 +85,29 @@ const databasePendingCount = computed(() =>
     ).length
 )
 
+const lifecycleSteps = [
+    'Discovery',
+    'Mapping',
+    'Preflight',
+    'Migration',
+    'Verification',
+    'Finalised',
+]
+
+const lifecycleStep = computed(() => {
+    switch (migrationState.value.status) {
+        case 'finalised':
+            return 5
+
+        case 'verified':
+        case 'verification_failed':
+            return 4
+
+        default:
+            return 3
+    }
+})
+
 const canFinalise = computed(() =>
     migrationState.value.status === 'verified'
     && verification.value?.verified === true
@@ -127,6 +150,37 @@ const activeCount = computed(() =>
             ].includes(server.status)
     ).length
 )
+
+function lifecycleStepClass(index: number) {
+    if (index < lifecycleStep.value) {
+        return 'border-status-success/40 bg-status-success/15 text-status-success'
+    }
+
+    if (index === lifecycleStep.value) {
+        if (
+            [
+                'failed',
+                'database_failed',
+                'verification_failed',
+                'completed_with_errors',
+            ].includes(migrationState.value.status)
+        ) {
+            return 'border-status-danger/40 bg-status-danger/15 text-status-danger'
+        }
+
+        return migrationState.value.status === 'finalised'
+            ? 'border-status-success/40 bg-status-success/15 text-status-success'
+            : 'border-hive/40 bg-hive/15 text-hive'
+    }
+
+    return 'border-zinc-800 bg-[#0d0f11] text-zinc-700'
+}
+
+function lifecycleLineClass(index: number) {
+    return index < lifecycleStep.value
+        ? 'bg-status-success/50'
+        : 'bg-zinc-800'
+}
 
 function startMigration() {
     starting.value = true
@@ -763,6 +817,49 @@ onUnmounted(() => {
                                     <RefreshCw class="size-4" />
                                     Refresh
                                 </button>
+                            </div>
+                        </div>
+
+                        <div class="mt-5 border-t border-zinc-800 pt-5">
+                            <div class="flex items-center">
+                                <template
+                                    v-for="(step, index) in lifecycleSteps"
+                                    :key="step"
+                                >
+                                    <div class="flex min-w-0 items-center gap-2">
+                                        <div
+                                            class="flex size-7 shrink-0 items-center justify-center rounded-full border text-[10px] font-black"
+                                            :class="lifecycleStepClass(index)"
+                                        >
+                                            <CircleCheck
+                                                v-if="index < lifecycleStep || (
+                                                    migrationState.status === 'finalised'
+                                                    && index === 5
+                                                )"
+                                                class="size-3.5"
+                                            />
+
+                                            <span v-else>
+                                                {{ index + 1 }}
+                                            </span>
+                                        </div>
+
+                                        <span
+                                            class="hidden text-[10px] font-black uppercase tracking-wide sm:block"
+                                            :class="index <= lifecycleStep
+                                                ? 'text-zinc-400'
+                                                : 'text-zinc-700'"
+                                        >
+                                            {{ step }}
+                                        </span>
+                                    </div>
+
+                                    <div
+                                        v-if="index < lifecycleSteps.length - 1"
+                                        class="mx-2 h-px min-w-2 flex-1 sm:mx-3"
+                                        :class="lifecycleLineClass(index)"
+                                    ></div>
+                                </template>
                             </div>
                         </div>
 
