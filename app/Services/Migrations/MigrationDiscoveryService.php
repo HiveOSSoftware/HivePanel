@@ -5,6 +5,7 @@ namespace App\Services\Migrations;
 use App\Models\PlatformMigration;
 use App\Models\PlatformMigrationServer;
 use App\Services\Migrations\Contracts\MigrationSourceConnector;
+use App\Services\Migrations\Sources\PterodactylCompatibleSourceConnector;
 use App\Services\Migrations\Sources\PterodactylDatabaseSource;
 use App\Services\Migrations\Sources\PterodactylForkSourceConnector;
 use App\Services\Migrations\Sources\PterodactylSourceConnector;
@@ -14,6 +15,11 @@ use Throwable;
 
 class MigrationDiscoveryService
 {
+    public function __construct(
+        private readonly MigrationDuplicateDetectionService $duplicates,
+    ) {
+    }
+
     public function connector(PlatformMigration $migration): MigrationSourceConnector
     {
         $config = $migration->source_config ?? [];
@@ -42,6 +48,8 @@ class MigrationDiscoveryService
             'error' => null,
         ])->save();
 
+        $connector = null;
+
         try {
             $connector = $this->connector($migration);
             $connector->testConnection();
@@ -58,14 +66,31 @@ class MigrationDiscoveryService
 
             $servers = $connector->discoverServers();
 
+            $this->storeCompatibility(
+                $migration,
+                $connector,
+                [
+                    'database_access' => null,
+                    'password_hashes' => null,
+                    'server_databases' => null,
+                ],
+            );
+
             $databaseUsers = [];
             $serverDatabases = [];
-
-            if ((bool) data_get(
+            $databaseEnabled = (bool) data_get(
                 $migration->source_config,
                 'database.enabled',
                 false,
-            )) {
+            );
+
+            $databaseCapabilities = [
+                'database_access' => null,
+                'password_hashes' => null,
+                'server_databases' => null,
+            ];
+
+            if ($databaseEnabled) {
                 $migration->forceFill([
                     'current_stage' => 'Reading source database metadata',
                     'progress' => 65,
@@ -74,8 +99,13 @@ class MigrationDiscoveryService
                 $databaseSource = $this->databaseSource($migration);
                 $databaseSource->testConnection();
 
+                $databaseCapabilities['database_access'] = true;
+
                 $databaseUsers = $databaseSource->users();
+                $databaseCapabilities['password_hashes'] = true;
+
                 $serverDatabases = $databaseSource->serverDatabases();
+                $databaseCapabilities['server_databases'] = true;
 
                 $sourceConfig = $migration->source_config ?? [];
 
@@ -91,6 +121,12 @@ class MigrationDiscoveryService
                     'source_config' => $sourceConfig,
                 ])->save();
             }
+
+            $this->storeCompatibility(
+                $migration,
+                $connector,
+                $databaseCapabilities,
+            );
 
             $migration->forceFill([
                 'current_stage' => 'Saving discovered inventory',
@@ -112,6 +148,20 @@ class MigrationDiscoveryService
                     $sourceMetadata['databases'] = $serverDatabases[
                         (string) $data['source_server_id']
                     ] ?? [];
+
+                    $duplicate = filled(
+                        $data['source_uuid']
+                        ?? null
+                    )
+                        ? $this->duplicates->find(
+                            $migration,
+                            (string) $data['source_uuid'],
+                        )
+                        : null;
+
+                    $sourceMetadata['migration_duplicate'] =
+                        $duplicate;
+
                     $data['source_metadata'] = $sourceMetadata;
 
                     PlatformMigrationServer::updateOrCreate(
@@ -121,8 +171,18 @@ class MigrationDiscoveryService
                         ],
                         [
                             ...$data,
-                            'status' => 'discovered',
-                            'current_stage' => null,
+                            'selected' => $duplicate
+                                ? false
+                                : (
+                                    $data['selected']
+                                    ?? true
+                                ),
+                            'status' => $duplicate
+                                ? 'skipped'
+                                : 'discovered',
+                            'current_stage' => $duplicate
+                                ? 'Already migrated'
+                                : null,
                             'progress' => 0,
                             'error' => null,
                         ]
@@ -150,7 +210,27 @@ class MigrationDiscoveryService
         } catch (Throwable $exception) {
             report($exception);
 
+            $sourceConfig = $migration->source_config ?? [];
+
+            $existingCompatibility = (array) (
+                $sourceConfig['compatibility']
+                ?? []
+            );
+
+            $sourceConfig['compatibility'] = [
+                ...$existingCompatibility,
+                'status' => filled(
+                    $existingCompatibility['status']
+                    ?? null
+                )
+                    ? $existingCompatibility['status']
+                    : 'unsupported',
+                'checked_at' => now()->toISOString(),
+                'error' => $exception->getMessage(),
+            ];
+
             $migration->forceFill([
+                'source_config' => $sourceConfig,
                 'status' => 'failed',
                 'current_stage' => 'Discovery failed',
                 'progress' => 0,
@@ -159,6 +239,36 @@ class MigrationDiscoveryService
 
             throw $exception;
         }
+    }
+
+    private function storeCompatibility(
+        PlatformMigration $migration,
+        MigrationSourceConnector $connector,
+        array $databaseCapabilities,
+    ): void {
+        $sourceConfig = $migration->source_config ?? [];
+
+        $report = $connector instanceof PterodactylCompatibleSourceConnector
+            ? $connector->compatibilityReport()
+            : [
+                'status' => 'full',
+                'capabilities' => [],
+                'warnings' => [],
+            ];
+
+        $report['capabilities'] = [
+            ...($report['capabilities'] ?? []),
+            ...$databaseCapabilities,
+        ];
+
+        $report['checked_at'] = now()->toISOString();
+        $report['error'] = null;
+
+        $sourceConfig['compatibility'] = $report;
+
+        $migration->forceFill([
+            'source_config' => $sourceConfig,
+        ])->save();
     }
 
     public function databaseSource(

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Jobs\Migrations\DiscoverPlatformMigration;
 use App\Jobs\Migrations\ExecutePlatformMigration;
+use App\Jobs\Migrations\MigratePlatformServer;
 use App\Jobs\Migrations\MigratePlatformServerDatabases;
 use App\Models\Comb;
 use App\Models\Node;
@@ -14,9 +15,13 @@ use App\Models\User;
 use App\Services\Migrations\MigrationDatabaseTransferConfigurationService;
 use App\Services\Migrations\MigrationDatabaseTransferService;
 use App\Services\Migrations\MigrationDiscoveryService;
+use App\Services\Migrations\MigrationDuplicateDetectionService;
+use App\Services\Migrations\LocalMigrationSourceDetectionService;
 use App\Services\Migrations\MigrationPlanningService;
 use App\Services\Migrations\MigrationPreparationService;
 use App\Services\Migrations\MigrationTransferConfigurationService;
+use App\Services\Migrations\MigrationFinalisationService;
+use App\Services\Migrations\MigrationVerificationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
@@ -34,6 +39,9 @@ class AdminMigrationController extends Controller
                     'id' => $migration->id,
                     'name' => $migration->name,
                     'source_type' => $migration->source_type,
+                    'source_label' => $this->sourceTypeLabel(
+                        $migration->source_type
+                    ),
                     'status' => $migration->status,
                     'current_stage' => $migration->current_stage,
                     'progress' => $migration->progress,
@@ -194,8 +202,10 @@ class AdminMigrationController extends Controller
         return back()->with('success', 'Source discovery has been queued.');
     }
 
-    public function mapping(PlatformMigration $migration)
-    {
+    public function mapping(
+        PlatformMigration $migration,
+        MigrationDuplicateDetectionService $duplicates,
+    ) {
         abort_unless(
             in_array($migration->status, ['ready', 'mapped'], true),
             422,
@@ -378,7 +388,7 @@ class AdminMigrationController extends Controller
                         'name' => $name,
                         'game' => $name,
                         'external_id' => $externalId,
-                        'source' => 'pterodactyl-migration',
+                        'source' => 'platform-migration',
                         'docker_image' => data_get(
                             $sourceServer?->source_metadata,
                             'docker_image',
@@ -407,9 +417,43 @@ class AdminMigrationController extends Controller
                 ];
             });
 
+        $serverPayload = $this->serverPayload(
+            $migration
+        )->map(function (array $server) use (
+            $migration,
+            $duplicates
+        ) {
+            $duplicate = filled(
+                $server['source_uuid']
+                ?? null
+            )
+                ? $duplicates->find(
+                    $migration,
+                    (string) $server['source_uuid'],
+                )
+                : null;
+
+            $sourceMetadata = (array) (
+                $server['source_metadata']
+                ?? []
+            );
+
+            $sourceMetadata['migration_duplicate'] =
+                $duplicate;
+
+            return [
+                ...$server,
+                'selected' => $duplicate
+                    ? false
+                    : ($server['selected'] ?? true),
+                'source_metadata' => $sourceMetadata,
+                'migration_duplicate' => $duplicate,
+            ];
+        });
+
         return Inertia::render('Admin/Migrations/Map', [
             'migration' => $this->migrationPayload($migration),
-            'servers' => $this->serverPayload($migration),
+            'servers' => $serverPayload,
             'nodes' => $nodes,
             'users' => $users,
             'combs' => $combs,
@@ -422,6 +466,7 @@ class AdminMigrationController extends Controller
     public function updateMapping(
         PlatformMigration $migration,
         Request $request,
+        MigrationDuplicateDetectionService $duplicates,
     ) {
         abort_unless(
             in_array($migration->status, ['ready', 'mapped'], true),
@@ -483,6 +528,22 @@ class AdminMigrationController extends Controller
 
         foreach ($servers as $server) {
             $selected = $selectedIds->contains((string) $server->id);
+
+            if (
+                $selected
+                && filled($server->source_uuid)
+            ) {
+                $duplicate = $duplicates->find(
+                    $migration,
+                    (string) $server->source_uuid,
+                );
+
+                if ($duplicate) {
+                    return back()->withErrors([
+                        'mapping' => "Server '{$server->name}' has already been migrated to HivePanel Cell '{$duplicate['cell_name']}'. Deselect it before continuing.",
+                    ]);
+                }
+            }
 
             $ownerKey = $server->owner_email
                 ? $this->mappingKey($server->owner_email)
@@ -911,6 +972,78 @@ class AdminMigrationController extends Controller
         ]);
     }
 
+    public function detectLocalSource(
+        PlatformMigration $migration,
+        Request $request,
+        LocalMigrationSourceDetectionService $detection,
+    ) {
+        abort_unless(
+            in_array(
+                $migration->status,
+                [
+                    'mapped',
+                    'preflight_ready',
+                    'preflight_blocked',
+                ],
+                true
+            ),
+            422,
+            'Complete mapping before detecting local source storage.'
+        );
+
+        $data = $request->validate([
+            'source_node' => [
+                'required',
+                'string',
+                'max:255',
+            ],
+            'configured_path_template' => [
+                'nullable',
+                'string',
+                'max:1500',
+            ],
+        ]);
+
+        $destinationNodeIds = $migration->servers()
+            ->where('selected', true)
+            ->where(
+                'source_node_name',
+                $data['source_node'],
+            )
+            ->pluck('destination_node_id')
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($destinationNodeIds->count() !== 1) {
+            return response()->json([
+                'message' => "Local source detection requires all selected servers from {$data['source_node']} to map to exactly one HivePanel destination Node.",
+            ], 422);
+        }
+
+        try {
+            $result = $detection->detect(
+                $migration,
+                (string) $data['source_node'],
+                (string) $destinationNodeIds->first(),
+                $data['configured_path_template']
+                    ?? null,
+            );
+        } catch (\Throwable $exception) {
+            report($exception);
+
+            return response()->json([
+                'message' => $exception->getMessage()
+                    ?: 'HivePanel could not detect local source storage.',
+            ], 422);
+        }
+
+        return response()->json([
+            'source_node' => $data['source_node'],
+            'detection' => $result,
+        ]);
+    }
+
     public function updateTransferConfiguration(
         PlatformMigration $migration,
         Request $request,
@@ -938,27 +1071,27 @@ class AdminMigrationController extends Controller
                 'in:sftp,local',
             ],
             'nodes.*.host' => [
-                'nullable',
-                'required_if:nodes.*.protocol,sftp',
+                'exclude_unless:nodes.*.protocol,sftp',
+                'required',
                 'string',
                 'max:255',
             ],
             'nodes.*.port' => [
-                'nullable',
-                'required_if:nodes.*.protocol,sftp',
+                'exclude_unless:nodes.*.protocol,sftp',
+                'required',
                 'integer',
                 'min:1',
                 'max:65535',
             ],
             'nodes.*.username' => [
-                'nullable',
-                'required_if:nodes.*.protocol,sftp',
+                'exclude_unless:nodes.*.protocol,sftp',
+                'required',
                 'string',
                 'max:255',
             ],
             'nodes.*.auth_type' => [
-                'nullable',
-                'required_if:nodes.*.protocol,sftp',
+                'exclude_unless:nodes.*.protocol,sftp',
+                'required',
                 'string',
                 'in:password,private_key',
             ],
@@ -1277,6 +1410,9 @@ class AdminMigrationController extends Controller
                     'database_failed',
                     'completed',
                     'completed_with_errors',
+                    'verified',
+                    'verification_failed',
+                    'finalised',
                     'failed',
                 ],
                 true
@@ -1367,6 +1503,59 @@ class AdminMigrationController extends Controller
         );
     }
 
+    public function verifyExecution(
+        PlatformMigration $migration,
+        MigrationVerificationService $verification,
+    ) {
+        abort_unless(
+            in_array(
+                $migration->status,
+                [
+                    'completed',
+                    'completed_with_errors',
+                    'verified',
+                    'verification_failed',
+                ],
+                true
+            ),
+            422,
+            'Complete the migration before running post-migration verification.'
+        );
+
+        $report = $verification->verify(
+            $migration
+        );
+
+        return response()->json([
+            'migration' => $this->migrationPayload(
+                $migration->fresh()
+            ),
+            'verification' => $report,
+        ]);
+    }
+
+    public function finaliseExecution(
+        PlatformMigration $migration,
+        MigrationFinalisationService $finalisation,
+    ) {
+        abort_unless(
+            $migration->status === 'verified',
+            422,
+            'The migration must be verified before it can be finalised.'
+        );
+
+        $result = $finalisation->finalise(
+            $migration
+        );
+
+        return response()->json([
+            'migration' => $this->migrationPayload(
+                $migration->fresh()
+            ),
+            'finalisation' => $result,
+        ]);
+    }
+
     public function startExecution(
         PlatformMigration $migration,
     ) {
@@ -1423,6 +1612,92 @@ class AdminMigrationController extends Controller
         );
     }
 
+    public function retryServer(
+        PlatformMigration $migration,
+        PlatformMigrationServer $server,
+    ) {
+        abort_unless(
+            (string) $server->platform_migration_id
+                === (string) $migration->id,
+            404,
+        );
+
+        abort_unless(
+            $server->status === 'failed',
+            422,
+            'Only failed server migrations can be retried.'
+        );
+
+        $previousError = $server->error;
+        $previousStage = $server->current_stage;
+        $hasDestinationCell = filled(
+            $server->destination_cell_id
+        );
+
+        $server->forceFill([
+            'status' => 'queued',
+            'current_stage' => $hasDestinationCell
+                ? 'Retry queued; destination Cell will be reused'
+                : 'Retry queued; destination Cell will be created',
+            'progress' => $hasDestinationCell
+                ? max(5, min(80, (int) $server->progress))
+                : 0,
+            'error' => null,
+            'completed_at' => null,
+        ])->save();
+
+        $sourceConfig = $migration->source_config ?? [];
+        $history = array_values(
+            (array) data_get(
+                $sourceConfig,
+                'execution_history',
+                [],
+            )
+        );
+
+        $history[] = [
+            'type' => 'server_retry',
+            'at' => now()->toISOString(),
+            'server_id' => (string) $server->id,
+            'server_name' => $server->name,
+            'destination_cell_id' =>
+                $server->destination_cell_id,
+            'reused_destination_cell' =>
+                $hasDestinationCell,
+            'previous_stage' => $previousStage,
+            'previous_error' => $previousError,
+        ];
+
+        $sourceConfig['execution_history'] =
+            array_slice($history, -100);
+
+        unset($sourceConfig['verification']);
+
+        $migration->forceFill([
+            'source_config' => $sourceConfig,
+            'status' => 'running',
+            'current_stage' =>
+                "Retrying {$server->name}",
+            'progress' => min(
+                99,
+                max(
+                    0,
+                    (int) $migration->progress,
+                ),
+            ),
+            'error' => null,
+        ])->save();
+
+        MigratePlatformServer::dispatch(
+            $server->id
+        );
+
+        return back()->with(
+            'success',
+            "Retry queued for {$server->name}."
+        );
+    }
+
     public function retryDatabases(
         PlatformMigration $migration,
         PlatformMigrationServer $server,
@@ -1450,7 +1725,30 @@ class AdminMigrationController extends Controller
             'No failed databases were found.'
         );
 
+        $sourceConfig = $migration->source_config ?? [];
+        $history = array_values(
+            (array) data_get(
+                $sourceConfig,
+                'execution_history',
+                [],
+            )
+        );
+
+        $history[] = [
+            'type' => 'database_retry',
+            'at' => now()->toISOString(),
+            'server_id' => (string) $server->id,
+            'server_name' => $server->name,
+            'database_count' => $reset,
+        ];
+
+        $sourceConfig['execution_history'] =
+            array_slice($history, -100);
+
+        unset($sourceConfig['verification']);
+
         $migration->forceFill([
+            'source_config' => $sourceConfig,
             'status' => 'database_pending',
             'current_stage' =>
                 "{$reset} database retry/retries queued",
@@ -1528,12 +1826,68 @@ class AdminMigrationController extends Controller
             ->with('success', 'Migration removed successfully.');
     }
 
+    private function sourceTypeLabel(string $sourceType): string
+    {
+        return match ($sourceType) {
+            'pterodactyl' => 'Pterodactyl',
+            'pterodactyl_fork' => 'Pterodactyl Fork',
+            default => Str::of($sourceType)
+                ->replace('_', ' ')
+                ->title()
+                ->toString(),
+        };
+    }
+
     private function migrationPayload(PlatformMigration $migration): array
     {
         return [
             'id' => $migration->id,
             'name' => $migration->name,
             'source_type' => $migration->source_type,
+            'source_label' => $this->sourceTypeLabel(
+                $migration->source_type
+            ),
+            'compatibility' => [
+                'status' => data_get(
+                    $migration->source_config,
+                    'compatibility.status',
+                ),
+                'checked_at' => data_get(
+                    $migration->source_config,
+                    'compatibility.checked_at',
+                ),
+                'capabilities' => (array) data_get(
+                    $migration->source_config,
+                    'compatibility.capabilities',
+                    [],
+                ),
+                'warnings' => (array) data_get(
+                    $migration->source_config,
+                    'compatibility.warnings',
+                    [],
+                ),
+                'error' => data_get(
+                    $migration->source_config,
+                    'compatibility.error',
+                ),
+            ],
+            'verification' => (array) data_get(
+                $migration->source_config,
+                'verification',
+                [],
+            ),
+            'execution_history' => array_values(
+                (array) data_get(
+                    $migration->source_config,
+                    'execution_history',
+                    [],
+                )
+            ),
+            'finalisation' => (array) data_get(
+                $migration->source_config,
+                'finalisation',
+                [],
+            ),
             'status' => $migration->status,
             'current_stage' => $migration->current_stage,
             'progress' => $migration->progress,

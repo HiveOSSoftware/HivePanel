@@ -14,6 +14,7 @@ import {
     Server,
     ServerCog,
     Save,
+    ShieldCheck,
     Trash2,
     User,
 } from 'lucide-vue-next'
@@ -66,6 +67,156 @@ const sourceNodeCount = computed(() =>
             .filter(Boolean)
     ).size
 )
+
+const sourceLabel = computed(() =>
+    migrationState.value.source_label
+    ?? (
+        migrationState.value.source_type === 'pterodactyl_fork'
+            ? 'Pterodactyl Fork'
+            : 'Pterodactyl'
+    )
+)
+
+const compatibility = computed(() =>
+    migrationState.value.compatibility
+    ?? {}
+)
+
+const compatibilityStatusLabel = computed(() => {
+    switch (compatibility.value.status) {
+        case 'full':
+            return 'Fully Compatible'
+
+        case 'compatible_with_warnings':
+            return 'Compatible with Warnings'
+
+        case 'unsupported':
+            return 'Unsupported'
+
+        default:
+            return 'Not Checked'
+    }
+})
+
+const compatibilityStatusClass = computed(() => {
+    switch (compatibility.value.status) {
+        case 'full':
+            return 'border-status-success/30 bg-status-success/10 text-status-success'
+
+        case 'compatible_with_warnings':
+            return 'border-status-warning/30 bg-status-warning/10 text-status-warning'
+
+        case 'unsupported':
+            return 'border-status-danger/30 bg-status-danger/10 text-status-danger'
+
+        default:
+            return 'border-zinc-700 bg-zinc-800 text-zinc-400'
+    }
+})
+
+const compatibilityCapabilities = computed(() => [
+    {
+        key: 'application_api',
+        label: 'Application API',
+        optional: false,
+    },
+    {
+        key: 'servers',
+        label: 'Servers',
+        optional: false,
+    },
+    {
+        key: 'users',
+        label: 'Users',
+        optional: false,
+    },
+    {
+        key: 'nodes',
+        label: 'Nodes',
+        optional: false,
+    },
+    {
+        key: 'allocations',
+        label: 'Allocations',
+        optional: false,
+    },
+    {
+        key: 'eggs',
+        label: 'Egg Definitions',
+        optional: false,
+    },
+    {
+        key: 'startup',
+        label: 'Startup Commands',
+        optional: false,
+    },
+    {
+        key: 'docker_images',
+        label: 'Docker Images',
+        optional: false,
+    },
+    {
+        key: 'environment',
+        label: 'Environment Variables',
+        optional: false,
+    },
+    {
+        key: 'database_access',
+        label: 'Source Database',
+        optional: true,
+    },
+    {
+        key: 'password_hashes',
+        label: 'Password Hashes',
+        optional: true,
+    },
+    {
+        key: 'server_databases',
+        label: 'Server Databases',
+        optional: true,
+    },
+])
+
+function capabilityValue(key: string) {
+    return compatibility.value.capabilities?.[key]
+        ?? null
+}
+
+function capabilityLabel(key: string, optional: boolean) {
+    const value = capabilityValue(key)
+
+    if (value === true) {
+        return 'Supported'
+    }
+
+    if (value === false) {
+        return 'Unavailable'
+    }
+
+    if (optional) {
+        return 'Optional'
+    }
+
+    return 'Not Checked'
+}
+
+function capabilityClass(key: string, optional: boolean) {
+    const value = capabilityValue(key)
+
+    if (value === true) {
+        return 'border-status-success/20 bg-status-success/5 text-status-success'
+    }
+
+    if (value === false) {
+        return 'border-status-warning/20 bg-status-warning/5 text-status-warning'
+    }
+
+    if (optional) {
+        return 'border-zinc-800 bg-[#0d0f11] text-zinc-500'
+    }
+
+    return 'border-zinc-800 bg-[#0d0f11] text-zinc-600'
+}
 
 function migrationStatusClass(status: string) {
     switch (status) {
@@ -245,6 +396,11 @@ onUnmounted(() => {
     stopPolling()
 })
 
+function migrationDuplicate(server: any) {
+    return server.source_metadata?.migration_duplicate
+        ?? null
+}
+
 function primaryAllocation(server: any) {
     const allocations = server.source_allocations ?? []
 
@@ -293,7 +449,7 @@ function formatDate(value?: string) {
                                         </h1>
 
                                         <span class="rounded-full border border-hive/30 bg-hive/10 px-2.5 py-1 text-xs font-black text-hive">
-                                            {{ migrationState.source_type }}
+                                            {{ sourceLabel }}
                                         </span>
                                     </div>
 
@@ -352,7 +508,7 @@ function formatDate(value?: string) {
                                 <div class="flex items-center justify-between gap-4">
                                     <div>
                                         <h2 class="text-sm font-black text-hive">
-                                            Discovering Pterodactyl
+                                            Discovering {{ sourceLabel }}
                                         </h2>
 
                                         <p class="mt-1 text-sm text-zinc-400">
@@ -427,7 +583,7 @@ function formatDate(value?: string) {
                             </div>
 
                             <p class="mt-1 text-sm text-zinc-500">
-                                Update the Pterodactyl panel URL or replace the Application API key. Leave the key blank to keep the currently stored encrypted key.
+                                Update the source panel URL or replace the Application API key. Leave the key blank to keep the currently stored encrypted key.
                             </p>
                         </div>
 
@@ -550,6 +706,88 @@ function formatDate(value?: string) {
                         </div>
                     </section>
 
+                    <section
+                        v-if="compatibility.status || migrationState.status === 'failed'"
+                        class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6"
+                    >
+                        <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                            <div class="flex items-start gap-3">
+                                <ShieldCheck class="mt-0.5 size-5 shrink-0 text-hive" />
+
+                                <div>
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <h2 class="text-lg font-black">
+                                            Source Compatibility
+                                        </h2>
+
+                                        <span
+                                            class="rounded-full border px-2.5 py-1 text-xs font-black"
+                                            :class="compatibilityStatusClass"
+                                        >
+                                            {{ compatibilityStatusLabel }}
+                                        </span>
+                                    </div>
+
+                                    <p class="mt-1 max-w-3xl text-sm leading-6 text-zinc-500">
+                                        HivePanel checks the Pterodactyl-compatible capabilities required by discovery and migration. Optional database features are only evaluated when Source Database Enhancement is enabled.
+                                    </p>
+
+                                    <p
+                                        v-if="compatibility.checked_at"
+                                        class="mt-2 text-xs font-bold text-zinc-600"
+                                    >
+                                        Last checked {{ formatDate(compatibility.checked_at) }}
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                            <div
+                                v-for="capability in compatibilityCapabilities"
+                                :key="capability.key"
+                                class="flex items-center justify-between gap-3 rounded-button border px-3 py-2.5"
+                                :class="capabilityClass(capability.key, capability.optional)"
+                            >
+                                <span class="text-xs font-black">
+                                    {{ capability.label }}
+                                </span>
+
+                                <span class="text-[10px] font-black uppercase tracking-wide">
+                                    {{ capabilityLabel(capability.key, capability.optional) }}
+                                </span>
+                            </div>
+                        </div>
+
+                        <div
+                            v-if="compatibility.warnings?.length"
+                            class="mt-5 rounded-button border border-status-warning/20 bg-status-warning/5 p-4"
+                        >
+                            <div class="flex items-center gap-2 text-sm font-black text-status-warning">
+                                <CircleAlert class="size-4" />
+                                Compatibility Warnings
+                            </div>
+
+                            <ul class="mt-3 space-y-2 text-xs leading-5 text-zinc-400">
+                                <li
+                                    v-for="warning in compatibility.warnings"
+                                    :key="warning"
+                                    class="flex items-start gap-2"
+                                >
+                                    <span class="mt-2 size-1 shrink-0 rounded-full bg-status-warning"></span>
+                                    <span>{{ warning }}</span>
+                                </li>
+                            </ul>
+                        </div>
+
+                        <div
+                            v-if="compatibility.error"
+                            class="mt-5 rounded-button border border-status-danger/20 bg-status-danger/5 p-4 text-xs leading-5 text-status-danger"
+                        >
+                            {{ compatibility.error }}
+                        </div>
+                    </section>
+
                     <section class="rounded-panel border border-zinc-800 bg-surface p-5 sm:p-6">
                         <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                             <div class="flex items-start gap-3">
@@ -558,7 +796,7 @@ function formatDate(value?: string) {
                                 <div>
                                     <div class="flex flex-wrap items-center gap-2">
                                         <h2 class="text-lg font-black">
-                                            Pterodactyl Database Enhancement
+                                            Source Database Enhancement
                                         </h2>
 
                                         <span
@@ -773,6 +1011,19 @@ function formatDate(value?: string) {
                                         <td class="px-5 py-4">
                                             <div class="font-black text-white">
                                                 {{ server.name }}
+                                            </div>
+
+                                            <div
+                                                v-if="migrationDuplicate(server)"
+                                                class="mt-2"
+                                            >
+                                                <a
+                                                    :href="`/admin/cells/${migrationDuplicate(server).cell_id}`"
+                                                    class="inline-flex items-center gap-1.5 rounded-full border border-status-warning/30 bg-status-warning/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-status-warning transition hover:bg-status-warning/20"
+                                                >
+                                                    <CircleAlert class="size-3" />
+                                                    Already Migrated · {{ migrationDuplicate(server).cell_name }}
+                                                </a>
                                             </div>
 
                                             <div class="mt-1 font-mono text-xs text-zinc-500">

@@ -26,7 +26,11 @@ const props = defineProps<{
 
 const form = useForm({
     selected_server_ids: props.servers
-        .filter((server) => server.selected !== false)
+        .filter((server) =>
+            server.selected !== false
+            && !server.migration_duplicate
+            && !server.source_metadata?.migration_duplicate
+        )
         .map((server) => server.id),
 
     owner_transfer: Object.fromEntries(
@@ -97,6 +101,22 @@ const form = useForm({
 
     allocation_strategy: props.servers.find((server) => server.selected)?.allocation_strategy ?? 'preserve',
 })
+
+function migrationDuplicate(server: any) {
+    return server.migration_duplicate
+        ?? server.source_metadata?.migration_duplicate
+        ?? null
+}
+
+function serverSelectable(server: any) {
+    return !migrationDuplicate(server)
+}
+
+const alreadyMigratedCount = computed(() =>
+    props.servers.filter((server) =>
+        !serverSelectable(server)
+    ).length
+)
 
 const selectedCount = computed(() => form.selected_server_ids.length)
 
@@ -173,20 +193,26 @@ const canContinue = computed(() =>
     && eggMappedCount.value === requiredEggs.value.length
 )
 
-function toggleServer(id: string) {
-    if (form.selected_server_ids.includes(id)) {
-        form.selected_server_ids = form.selected_server_ids.filter((value) => value !== id)
+function toggleServer(server: any) {
+    if (!serverSelectable(server)) {
+        return
+    }
+
+    if (form.selected_server_ids.includes(server.id)) {
+        form.selected_server_ids = form.selected_server_ids.filter((value) => value !== server.id)
         return
     }
 
     form.selected_server_ids = [
         ...form.selected_server_ids,
-        id,
+        server.id,
     ]
 }
 
 function selectAll() {
-    form.selected_server_ids = props.servers.map((server) => server.id)
+    form.selected_server_ids = props.servers
+        .filter((server) => serverSelectable(server))
+        .map((server) => server.id)
 }
 
 function selectNone() {
@@ -229,41 +255,6 @@ function toggleDatabase(serverId: string, database: any) {
     ]
 }
 
-function combMatchLabel(egg: any) {
-    if (egg.match?.confidence === 'saved') {
-        return 'Saved mapping'
-    }
-
-    if (egg.match?.confidence === 'exact') {
-        return 'Exact match'
-    }
-
-    if (egg.match?.confidence === 'high') {
-        return 'High-confidence match'
-    }
-
-    if (egg.match?.confidence === 'low') {
-        return 'Needs review'
-    }
-
-    return 'No automatic match'
-}
-
-function combMatchClass(egg: any) {
-    if (
-        egg.match?.confidence === 'exact'
-        || egg.match?.confidence === 'high'
-    ) {
-        return 'border-status-success/30 bg-status-success/10 text-status-success'
-    }
-
-    if (egg.match?.confidence === 'saved') {
-        return 'border-hive/30 bg-hive/10 text-hive'
-    }
-
-    return 'border-status-warning/30 bg-status-warning/10 text-status-warning'
-}
-
 function submit() {
     form.patch(`/admin/migrations/${props.migration.id}/mapping`, {
         preserveScroll: true,
@@ -296,7 +287,7 @@ function submit() {
                                 </h1>
 
                                 <p class="mt-2 text-sm text-zinc-400">
-                                    Map the Pterodactyl inventory to HivePanel before anything is created or transferred.
+                                    Map the discovered source inventory to HivePanel before anything is created or transferred.
                                 </p>
                             </div>
 
@@ -317,7 +308,14 @@ function submit() {
                             </div>
 
                             <div class="mt-1 text-2xl font-black">
-                                {{ selectedCount }}/{{ servers.length }}
+                                {{ selectedCount }}/{{ servers.length - alreadyMigratedCount }}
+                            </div>
+
+                            <div
+                                v-if="alreadyMigratedCount > 0"
+                                class="mt-1 text-xs font-bold text-status-warning"
+                            >
+                                {{ alreadyMigratedCount }} already migrated
                             </div>
                         </div>
 
@@ -399,7 +397,7 @@ function submit() {
                                         v-if="!form.owner_transfer[owner.key]"
                                         class="mb-3 text-xs leading-5 text-status-warning"
                                     >
-                                        Select an existing HivePanel user below as the fallback owner for any selected servers belonging to this Pterodactyl account.
+                                        Select an existing HivePanel user below as the fallback owner for any selected servers belonging to this source account.
                                     </p>
 
                                     <select
@@ -566,19 +564,6 @@ function submit() {
                                         </option>
                                     </select>
 
-                                    <div class="mt-2 flex items-start gap-2">
-                                        <span
-                                            class="shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-black"
-                                            :class="combMatchClass(egg)"
-                                        >
-                                            {{ combMatchLabel(egg) }}
-                                        </span>
-
-                                        <p class="min-w-0 text-[11px] leading-5 text-zinc-600">
-                                            {{ egg.match?.reason || 'Choose the destination Comb manually.' }}
-                                        </p>
-                                    </div>
-
                                     <div
                                         v-if="form.comb_map[egg.key] === '__create__'"
                                         class="mt-3 space-y-2"
@@ -674,12 +659,31 @@ function submit() {
                         </div>
                     </section>
 
+                    <section
+                        v-if="alreadyMigratedCount > 0"
+                        class="rounded-panel border border-status-warning/30 bg-status-warning/10 p-4"
+                    >
+                        <div class="flex items-start gap-3">
+                            <CircleAlert class="mt-0.5 size-5 shrink-0 text-status-warning" />
+
+                            <div>
+                                <div class="text-sm font-black text-status-warning">
+                                    {{ alreadyMigratedCount }} server{{ alreadyMigratedCount === 1 ? '' : 's' }} already migrated
+                                </div>
+
+                                <p class="mt-1 text-xs leading-5 text-zinc-400">
+                                    HivePanel found an existing destination Cell for the same source panel and server UUID. These servers are excluded from selection to prevent duplicate Cells.
+                                </p>
+                            </div>
+                        </div>
+                    </section>
+
                     <section class="overflow-hidden rounded-panel border border-zinc-800 bg-surface">
                         <div class="flex flex-col gap-3 border-b border-zinc-800 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
                             <div>
                                 <h2 class="text-lg font-black">Servers to Migrate</h2>
                                 <p class="mt-1 text-sm text-zinc-500">
-                                    Deselect test or retired servers you do not want included.
+                                    Deselect test or retired servers you do not want included. Servers already migrated to HivePanel are locked.
                                 </p>
                             </div>
 
@@ -706,28 +710,55 @@ function submit() {
                             <div
                                 v-for="server in servers"
                                 :key="server.id"
-                                class="p-4 transition hover:bg-surface-light/40 sm:px-6"
+                                class="p-4 transition sm:px-6"
+                                :class="serverSelectable(server)
+                                    ? 'hover:bg-surface-light/40'
+                                    : 'bg-status-warning/[0.03]'"
                             >
                                 <button
                                     type="button"
                                     class="flex w-full items-center gap-4 text-left"
-                                    @click="toggleServer(server.id)"
+                                    :class="serverSelectable(server)
+                                        ? ''
+                                        : 'cursor-not-allowed opacity-75'"
+                                    :disabled="!serverSelectable(server)"
+                                    @click="toggleServer(server)"
                                 >
                                     <div
                                         class="flex size-5 shrink-0 items-center justify-center rounded border"
-                                        :class="form.selected_server_ids.includes(server.id)
-                                            ? 'border-hive bg-hive text-black'
-                                            : 'border-zinc-700 bg-[#0d0f11]'"
+                                        :class="!serverSelectable(server)
+                                            ? 'border-status-warning/40 bg-status-warning/10 text-status-warning'
+                                            : (
+                                                form.selected_server_ids.includes(server.id)
+                                                    ? 'border-hive bg-hive text-black'
+                                                    : 'border-zinc-700 bg-[#0d0f11]'
+                                            )"
                                     >
                                         <Check
                                             v-if="form.selected_server_ids.includes(server.id)"
                                             class="size-3.5"
                                         />
+
+                                        <CircleAlert
+                                            v-else-if="!serverSelectable(server)"
+                                            class="size-3.5"
+                                        />
                                     </div>
 
                                     <div class="min-w-0 flex-1">
-                                        <div class="font-black text-white">
-                                            {{ server.name }}
+                                        <div class="flex flex-wrap items-center gap-2">
+                                            <div class="font-black text-white">
+                                                {{ server.name }}
+                                            </div>
+
+                                            <a
+                                                v-if="migrationDuplicate(server)"
+                                                :href="`/admin/cells/${migrationDuplicate(server).cell_id}`"
+                                                class="inline-flex items-center gap-1 rounded-full border border-status-warning/30 bg-status-warning/10 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-status-warning transition hover:bg-status-warning/20"
+                                                @click.stop
+                                            >
+                                                Already Migrated · {{ migrationDuplicate(server).cell_name }}
+                                            </a>
                                         </div>
 
                                         <div class="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">

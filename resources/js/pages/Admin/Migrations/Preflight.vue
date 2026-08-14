@@ -15,7 +15,7 @@ import {
     Server,
     TriangleAlert,
 } from 'lucide-vue-next'
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 
 const props = defineProps<{
     migration: any
@@ -36,6 +36,24 @@ const props = defineProps<{
 const preparing = ref(false)
 const generatingKeyFor = ref<string | null>(null)
 const copiedCommandFor = ref<string | null>(null)
+const localDetectionFor = ref<string | null>(null)
+const localDetectionErrors = ref<Record<string, string>>({})
+const localPathOverrides = ref<Record<string, boolean>>(
+    Object.fromEntries(
+        props.transferNodes.map((node) => [
+            node.source_node,
+            false,
+        ])
+    )
+)
+const localDetections = ref<Record<string, any>>(
+    Object.fromEntries(
+        props.transferNodes.map((node) => [
+            node.source_node,
+            node.local_detection ?? null,
+        ])
+    )
+)
 
 const transferForm = useForm({
     nodes: Object.fromEntries(
@@ -151,6 +169,210 @@ async function copySetupCommand(node: any) {
     }, 2000)
 }
 
+function markLocalPathOverride(node: any) {
+    localPathOverrides.value[node.source_node] = true
+    localDetections.value[node.source_node] = null
+    delete localDetectionErrors.value[node.source_node]
+}
+
+function localDetection(node: any) {
+    return localDetections.value[node.source_node]
+        ?? null
+}
+
+function localDetectionReady(node: any) {
+    const detection = localDetection(node)
+
+    const runtimeReady =
+        detection?.runtime_check?.available !== true
+        || detection?.runtime_check?.all_stopped === true
+
+    return Boolean(
+        detection?.detected
+        && (detection?.missing_uuids?.length ?? 0) === 0
+        && detection?.enough_space !== false
+        && runtimeReady
+    )
+}
+
+function runtimeCheck(node: any) {
+    return localDetection(node)?.runtime_check
+        ?? null
+}
+
+function runtimeStateLabel(node: any) {
+    const runtime = runtimeCheck(node)
+
+    if (!runtime?.available) {
+        return 'Not automatically verified'
+    }
+
+    if (runtime.all_stopped === true) {
+        return 'No active source containers detected'
+    }
+
+    return `${runtime.active_count ?? 0} active source container${runtime.active_count === 1 ? '' : 's'} detected`
+}
+
+function runtimeStateClass(node: any) {
+    const runtime = runtimeCheck(node)
+
+    if (!runtime?.available) {
+        return 'border-status-warning/20 bg-status-warning/5 text-status-warning'
+    }
+
+    if (runtime.all_stopped === true) {
+        return 'border-status-success/20 bg-status-success/5 text-status-success'
+    }
+
+    return 'border-status-danger/20 bg-status-danger/5 text-status-danger'
+}
+
+function localStatusLabel(node: any) {
+    if (localDetectionFor.value === node.source_node) {
+        return 'Detecting local source'
+    }
+
+    if (localDetectionReady(node)) {
+        return 'Local source detected'
+    }
+
+    if (localDetectionErrors.value[node.source_node]) {
+        return 'Detection failed'
+    }
+
+    if (
+        transferForm.nodes[node.source_node].same_machine_confirmed
+        && transferForm.nodes[node.source_node].source_servers_stopped_confirmed
+    ) {
+        return 'Local source not verified'
+    }
+
+    return 'Confirmation required'
+}
+
+function localStatusClass(node: any) {
+    if (localDetectionReady(node)) {
+        return 'border-status-success/30 bg-status-success/10 text-status-success'
+    }
+
+    if (localDetectionErrors.value[node.source_node]) {
+        return 'border-status-danger/30 bg-status-danger/10 text-status-danger'
+    }
+
+    return 'border-status-warning/30 bg-status-warning/10 text-status-warning'
+}
+
+async function detectLocalSource(node: any, force = false) {
+    const formNode = transferForm.nodes[node.source_node]
+
+    if (!formNode || formNode.protocol !== 'local') {
+        return
+    }
+
+    if (
+        !force
+        && localDetectionReady(node)
+        && !localPathOverrides.value[node.source_node]
+    ) {
+        return
+    }
+
+    if (localDetectionFor.value === node.source_node) {
+        return
+    }
+
+    localDetectionFor.value = node.source_node
+    delete localDetectionErrors.value[node.source_node]
+
+    try {
+        const response = await fetch(
+            `/admin/migrations/${props.migration.id}/transfer/detect-local`,
+            {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRF-TOKEN': document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content ?? '',
+                },
+                body: JSON.stringify({
+                    source_node: node.source_node,
+                    configured_path_template:
+                        localPathOverrides.value[node.source_node]
+                            ? formNode.path_template
+                            : null,
+                }),
+            }
+        )
+
+        const payload = await response.json()
+
+        if (!response.ok) {
+            throw new Error(
+                payload.message
+                ?? 'HivePanel could not detect local source storage.'
+            )
+        }
+
+        const detection = payload.detection ?? null
+
+        localDetections.value[node.source_node] =
+            detection
+
+        if (
+            detection?.detected
+            && detection?.path_template
+        ) {
+            formNode.path_template =
+                detection.path_template
+
+            localPathOverrides.value[node.source_node] =
+                false
+        }
+    } catch (error: any) {
+        localDetectionErrors.value[node.source_node] =
+            error?.message
+            ?? 'HivePanel could not detect local source storage.'
+    } finally {
+        localDetectionFor.value = null
+    }
+}
+
+function installLocalDetectionWatchers() {
+    props.transferNodes.forEach((node) => {
+        watch(
+            () =>
+                transferForm.nodes[node.source_node]?.protocol,
+            (protocol, previousProtocol) => {
+                if (
+                    protocol === 'local'
+                    && previousProtocol !== 'local'
+                ) {
+                    detectLocalSource(
+                        node,
+                        true
+                    )
+                }
+            }
+        )
+    })
+}
+
+onMounted(() => {
+    installLocalDetectionWatchers()
+
+    props.transferNodes.forEach((node) => {
+        if (
+            transferForm.nodes[node.source_node]?.protocol
+            === 'local'
+        ) {
+            detectLocalSource(node)
+        }
+    })
+})
+
 function saveTransferAccess() {
     transferForm.patch(
         `/admin/migrations/${props.migration.id}/transfer`,
@@ -243,7 +465,7 @@ function actionClass(action: string) {
                                 </h1>
 
                                 <p class="mt-2 text-sm text-zinc-400">
-                                    Validate destination networking/resources and configure direct access to the underlying Pterodactyl nodes before execution.
+                                    Validate destination networking/resources and configure direct access to the underlying source nodes before execution.
                                 </p>
                             </div>
 
@@ -294,7 +516,7 @@ function actionClass(action: string) {
                         </div>
 
                         <p class="mt-1 max-w-4xl text-sm text-zinc-500">
-                            Choose how HivePanel should read each Pterodactyl node. Use In-place when the mapped HivePanel Worker is installed on the same physical machine; otherwise use Remote SFTP. In-place copies files locally and leaves the original Pterodactyl volume untouched for rollback.
+                            Choose how HivePanel should read each source node. Use In-place when the mapped HivePanel Worker is installed on the same physical machine; otherwise use Remote SFTP. In-place copies files locally and leaves the original source data untouched for rollback.
                         </p>
 
                         <form
@@ -315,15 +537,13 @@ function actionClass(action: string) {
                                     <span
                                         class="rounded-full border px-2.5 py-1 text-xs font-black"
                                         :class="transferForm.nodes[node.source_node].protocol === 'local'
-                                            ? (transferForm.nodes[node.source_node].same_machine_confirmed && transferForm.nodes[node.source_node].source_servers_stopped_confirmed
-                                                ? 'border-status-success/30 bg-status-success/10 text-status-success'
-                                                : 'border-status-warning/30 bg-status-warning/10 text-status-warning')
+                                            ? localStatusClass(node)
                                             : (node.has_password || node.has_private_key
                                                 ? 'border-status-success/30 bg-status-success/10 text-status-success'
                                                 : 'border-status-warning/30 bg-status-warning/10 text-status-warning')"
                                     >
                                         {{ transferForm.nodes[node.source_node].protocol === 'local'
-                                            ? (transferForm.nodes[node.source_node].same_machine_confirmed && transferForm.nodes[node.source_node].source_servers_stopped_confirmed ? 'In-place configured' : 'Confirmation required')
+                                            ? localStatusLabel(node)
                                             : (node.has_password || node.has_private_key ? 'Node access saved' : 'Node access required') }}
                                     </span>
                                 </div>
@@ -421,7 +641,7 @@ function actionClass(action: string) {
                                                 </div>
 
                                                 <p class="mt-1 max-w-3xl text-xs leading-5 text-zinc-500">
-                                                    Generate a dedicated HivePanel migration key, then copy the command below and run it once on the underlying Pterodactyl node. It creates <code>hivepanel-migration</code>, installs the restricted SFTP key, reads Wings' configured <code>system.data</code> path, and grants read-only access to the real Pterodactyl volume directory. HivePanel detects and fills the volume template automatically when you save node access.
+                                                    Generate a dedicated HivePanel migration key, then copy the command below and run it once on the underlying source node. It creates <code>hivepanel-migration</code>, installs the restricted SFTP key, reads Wings' configured <code>system.data</code> path, and grants read-only access to the real Pterodactyl volume directory. HivePanel detects and fills the volume template automatically when you save node access.
                                                 </p>
                                             </div>
 
@@ -480,7 +700,7 @@ function actionClass(action: string) {
                                                 </div>
 
                                                 <p class="mt-1 max-w-4xl text-xs leading-5 text-zinc-400">
-                                                    The mapped HivePanel Worker must be installed on the same physical machine as this Pterodactyl node. HivePanel copies the source volume directly into the new Cell without using the network. The original Pterodactyl files remain untouched for rollback.
+                                                    The mapped HivePanel Worker must be installed on the same physical machine as this source node. HivePanel copies the source volume directly into the new Cell without using the network. The original source files remain untouched for rollback.
                                                 </p>
 
                                                 <div class="mt-4 space-y-3">
@@ -492,7 +712,7 @@ function actionClass(action: string) {
                                                         />
 
                                                         <span>
-                                                            I confirm the mapped HivePanel Worker is installed on the same machine as this Pterodactyl node.
+                                                            I confirm the mapped HivePanel Worker is installed on the same machine as this source node.
                                                         </span>
                                                     </label>
 
@@ -504,14 +724,200 @@ function actionClass(action: string) {
                                                         />
 
                                                         <span>
-                                                            I have stopped the selected servers in Pterodactyl and will keep them stopped during cutover.
+                                                            I have stopped the selected source servers and will keep them stopped during cutover. HivePanel will also verify this automatically when the source runtime is detectable.
                                                         </span>
                                                     </label>
                                                 </div>
 
+                                                <div
+                                                    v-if="localDetection(node)?.detected"
+                                                    class="mt-4 rounded-button border border-status-success/20 bg-status-success/5 p-4"
+                                                >
+                                                    <div class="text-xs font-black uppercase tracking-wide text-status-success">
+                                                        Local source detected
+                                                    </div>
+
+                                                    <div class="mt-2 font-mono text-sm font-black text-white">
+                                                        {{ localDetection(node).data_path }}
+                                                    </div>
+
+                                                    <div class="mt-2 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+                                                        <span>
+                                                            Detected from
+                                                            <strong class="text-zinc-300">
+                                                                {{ localDetection(node).source || 'Worker filesystem scan' }}
+                                                            </strong>
+                                                        </span>
+
+                                                        <span
+                                                            v-if="localDetection(node).enough_space !== false"
+                                                            class="inline-flex items-center gap-1 rounded-full border border-status-success/20 bg-status-success/10 px-2 py-0.5 font-black text-status-success"
+                                                        >
+                                                            <CircleCheck class="size-3" />
+                                                            Enough disk space
+                                                        </span>
+                                                    </div>
+
+                                                    <div class="mt-3 grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
+                                                        <div>
+                                                            <div class="font-black text-zinc-600">Confidence</div>
+                                                            <div class="mt-1 font-bold text-zinc-300">
+                                                                {{ localDetection(node).confidence || 'Unknown' }}
+                                                            </div>
+                                                        </div>
+
+                                                        <div>
+                                                            <div class="font-black text-zinc-600">Volumes Found</div>
+                                                            <div class="mt-1 font-bold text-zinc-300">
+                                                                {{ localDetection(node).matched_uuids?.length ?? 0 }}
+                                                            </div>
+                                                        </div>
+
+                                                        <div>
+                                                            <div class="font-black text-zinc-600">Source Size</div>
+                                                            <div class="mt-1 font-bold text-zinc-300">
+                                                                {{ Math.ceil((localDetection(node).total_bytes ?? 0) / 1024 / 1024) }} MB
+                                                            </div>
+                                                        </div>
+
+                                                        <div>
+                                                            <div class="font-black text-zinc-600">Free Space</div>
+                                                            <div class="mt-1 font-bold text-zinc-300">
+                                                                {{ localDetection(node).free_bytes
+                                                                    ? `${Math.floor(localDetection(node).free_bytes / 1024 / 1024 / 1024)} GB`
+                                                                    : 'Unknown' }}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div
+                                                        class="mt-4 rounded-button border p-4"
+                                                        :class="runtimeStateClass(node)"
+                                                    >
+                                                        <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                                            <div>
+                                                                <div class="text-[10px] font-black uppercase tracking-wide opacity-70">
+                                                                    Source Server State
+                                                                </div>
+
+                                                                <div class="mt-1 text-sm font-black">
+                                                                    {{ runtimeStateLabel(node) }}
+                                                                </div>
+                                                            </div>
+
+                                                            <button
+                                                                type="button"
+                                                                class="rounded-button border border-current/30 bg-black/10 px-3 py-2 text-xs font-black transition hover:bg-black/20"
+                                                                @click="detectLocalSource(node, true)"
+                                                            >
+                                                                Check Again
+                                                            </button>
+                                                        </div>
+
+                                                        <div
+                                                            v-if="runtimeCheck(node)?.available && runtimeCheck(node)?.active_containers?.length"
+                                                            class="mt-3 space-y-2"
+                                                        >
+                                                            <div
+                                                                v-for="container in runtimeCheck(node).active_containers"
+                                                                :key="`${container.uuid}:${container.id}`"
+                                                                class="rounded-button border border-current/20 bg-black/10 p-3"
+                                                            >
+                                                                <div class="font-mono text-xs font-black">
+                                                                    {{ container.uuid }}
+                                                                </div>
+
+                                                                <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] opacity-80">
+                                                                    <span>{{ container.name || container.id }}</span>
+                                                                    <span>{{ container.state }}</span>
+                                                                    <span v-if="container.status">{{ container.status }}</span>
+                                                                    <span v-if="container.matched_by?.length">
+                                                                        Matched by {{ container.matched_by.join(', ') }}
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+
+                                                        <p
+                                                            v-else-if="!runtimeCheck(node)"
+                                                            class="mt-2 text-xs leading-5 opacity-80"
+                                                        >
+                                                            The Worker did not return source runtime information. Update or restart the Worker, then use Check Again. Until runtime information is available, the stopped-server confirmation remains the manual safety fallback.
+                                                        </p>
+
+                                                        <p
+                                                            v-else-if="!runtimeCheck(node)?.available"
+                                                            class="mt-2 text-xs leading-5 opacity-80"
+                                                        >
+                                                            HivePanel could not verify the source container runtime automatically{{ runtimeCheck(node)?.error ? `: ${runtimeCheck(node).error}` : '.' }} The stopped-server confirmation remains required as a manual safety assertion.
+                                                        </p>
+                                                    </div>
+
+                                                    <div
+                                                        v-if="localDetection(node).warnings?.length"
+                                                        class="mt-3 space-y-1 text-xs leading-5 text-status-warning"
+                                                    >
+                                                        <div
+                                                            v-for="warning in localDetection(node).warnings"
+                                                            :key="warning"
+                                                        >
+                                                            {{ warning }}
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div
+                                                    v-if="localDetectionFor === node.source_node"
+                                                    class="mt-4 rounded-button border border-hive/20 bg-hive/5 p-4 text-xs font-bold text-hive"
+                                                >
+                                                    Detecting local source storage on the mapped HivePanel Worker...
+                                                </div>
+
+                                                <div
+                                                    v-else-if="localDetectionErrors[node.source_node]"
+                                                    class="mt-4 rounded-button border border-status-danger/20 bg-status-danger/5 p-4"
+                                                >
+                                                    <div class="text-xs font-black text-status-danger">
+                                                        Automatic detection failed
+                                                    </div>
+
+                                                    <p class="mt-1 text-xs leading-5 text-zinc-400">
+                                                        {{ localDetectionErrors[node.source_node] }}
+                                                    </p>
+
+                                                    <button
+                                                        type="button"
+                                                        class="mt-3 rounded-button border border-zinc-700 bg-black/20 px-3 py-2 text-xs font-black text-zinc-300 transition hover:border-hive hover:text-hive"
+                                                        @click="detectLocalSource(node, true)"
+                                                    >
+                                                        Retry Detection
+                                                    </button>
+                                                </div>
+
+                                                <div
+                                                    v-else-if="!localDetection(node)?.detected"
+                                                    class="mt-4 rounded-button border border-zinc-800 bg-black/20 p-4"
+                                                >
+                                                    <div class="text-xs font-black text-zinc-300">
+                                                        Local source not verified
+                                                    </div>
+
+                                                    <p class="mt-1 text-xs leading-5 text-zinc-500">
+                                                        HivePanel can ask the mapped Worker to inspect daemon configuration and validate the selected source UUID directories before saving.
+                                                    </p>
+
+                                                    <button
+                                                        type="button"
+                                                        class="mt-3 rounded-button border border-hive/40 bg-hive/10 px-3 py-2 text-xs font-black text-hive transition hover:bg-hive/20"
+                                                        @click="detectLocalSource(node, true)"
+                                                    >
+                                                        Detect Local Source
+                                                    </button>
+                                                </div>
+
                                                 <div class="mt-4 rounded-button border border-zinc-800 bg-black/20 p-3 text-xs leading-5 text-zinc-500">
                                                     <strong class="text-zinc-300">File strategy:</strong>
-                                                    Copy source files and keep the original Pterodactyl volume unchanged. This is slower than a move for very large servers, but provides a clean rollback path.
+                                                    Copy source files and keep the original source data unchanged. This is slower than a move for very large servers, but provides a clean rollback path.
                                                 </div>
                                             </div>
                                         </div>
@@ -520,20 +926,21 @@ function actionClass(action: string) {
                                     <div class="md:col-span-2 xl:col-span-6">
                                         <label class="text-xs font-black text-zinc-500">
                                             {{ transferForm.nodes[node.source_node].protocol === 'local'
-                                                ? 'Local Pterodactyl Volume Path Template'
-                                                : 'Pterodactyl Volume Path Template' }}
+                                                ? 'Local Source Data Path'
+                                                : 'Source Volume Path Template' }}
                                         </label>
                                         <input
                                             v-model="transferForm.nodes[node.source_node].path_template"
                                             class="mt-1 w-full rounded-button border border-zinc-800 bg-black/30 px-3 py-2.5 font-mono text-sm font-bold text-white outline-none focus:border-hive"
-                                            placeholder="/var/lib/pterodactyl/volumes/{uuid}"
+                                            placeholder="/path/to/source/volumes/{uuid}"
+                                            @input="markLocalPathOverride(node)"
                                         />
 
                                         <div class="mt-1 flex flex-wrap items-center gap-2">
                                             <p class="text-xs text-zinc-600">
                                                 {{ transferForm.nodes[node.source_node].protocol === 'local'
-                                                    ? 'Absolute path visible to the HivePanel Worker. Use {uuid} where the Pterodactyl server UUID should be inserted.'
-                                                    : 'Path to server data on the underlying source node. Use {uuid} where the Pterodactyl server UUID should be inserted.' }}
+                                                    ? 'HivePanel detects the source data root automatically. Editing this field adds a manual candidate, but stronger daemon/filesystem evidence can still win. Use {uuid} for the source server UUID.'
+                                                    : 'Path to server data on the underlying source node. Use {uuid} where the source server UUID should be inserted.' }}
                                             </p>
 
                                             <span

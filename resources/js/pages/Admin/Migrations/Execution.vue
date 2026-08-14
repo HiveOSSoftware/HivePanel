@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ConfirmationModal from '@/components/ui/ConfirmationModal.vue'
 import AppLayout from '@/layouts/AppLayout.vue'
 import { Head, Link, router } from '@inertiajs/vue3'
 import {
@@ -7,11 +8,15 @@ import {
     CircleCheck,
     Clipboard,
     Database,
+    Eye,
+    EyeOff,
     ExternalLink,
     LoaderCircle,
+    LockKeyhole,
     Play,
     RefreshCw,
     Server,
+    ShieldCheck,
     TriangleAlert,
 } from 'lucide-vue-next'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
@@ -33,16 +38,19 @@ const serverState = ref(
 
 const starting = ref(false)
 const startingDatabases = ref(false)
-const revealedDatabasePasswords = ref<Record<string, boolean>>({})
-const copiedDatabasePassword = ref<string | null>(null)
+const verifying = ref(false)
+const revealedPasswords = ref<Record<string, boolean>>({})
 const copiedCredential = ref<string | null>(null)
+const retryingServers = ref<Record<string, boolean>>({})
+const finalising = ref(false)
+const showFinaliseModal = ref(false)
+const finalisationError = ref<string | null>(null)
 let pollTimer: number | undefined
 
 const executionActive = computed(() =>
     [
         'running',
         'database_pending',
-        'database_transferring',
     ].includes(
         migrationState.value.status
     )
@@ -77,51 +85,30 @@ const databasePendingCount = computed(() =>
     ).length
 )
 
-const selectedDatabaseTotal = computed(() =>
-    serverState.value.reduce(
-        (total, server) =>
-            total + selectedDatabaseCount(server),
-        0
-    )
+const canFinalise = computed(() =>
+    migrationState.value.status === 'verified'
+    && verification.value?.verified === true
 )
 
-const completedDatabaseCount = computed(() =>
-    serverState.value.reduce(
-        (total, server) =>
-            total + (
-                server.database_plan
-                ?? []
-            ).filter(
-                (database: any) =>
-                    database.selected
-                    && database.status === 'completed'
-            ).length,
-        0
-    )
+const finalisation = computed(() =>
+    migrationState.value.finalisation
+    ?? {}
 )
 
-const failedDatabaseCount = computed(() =>
-    serverState.value.reduce(
-        (total, server) =>
-            total + (
-                server.database_plan
-                ?? []
-            ).filter(
-                (database: any) =>
-                    database.selected
-                    && database.status === 'failed'
-            ).length,
-        0
-    )
-)
-
-const migrationFinished = computed(() =>
+const canVerify = computed(() =>
     [
         'completed',
         'completed_with_errors',
+        'verified',
+        'verification_failed',
     ].includes(
         migrationState.value.status
     )
+)
+
+const verification = computed(() =>
+    migrationState.value.verification
+    ?? {}
 )
 
 const canStartDatabases = computed(() =>
@@ -187,6 +174,172 @@ function startDatabaseMigration() {
             },
         }
     )
+}
+
+async function finaliseMigration() {
+    if (
+        !canFinalise.value
+        || finalising.value
+    ) {
+        return
+    }
+
+    finalising.value = true
+    finalisationError.value = null
+
+    try {
+        const response = await fetch(
+            `/admin/migrations/${migrationState.value.id}/execution/finalise`,
+            {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRF-TOKEN': document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content ?? '',
+                },
+                body: JSON.stringify({}),
+            }
+        )
+
+        const payload = await response.json()
+
+        if (!response.ok) {
+            throw new Error(
+                payload.message
+                ?? 'Migration finalisation failed.'
+            )
+        }
+
+        migrationState.value = payload.migration
+        showFinaliseModal.value = false
+    } catch (error: any) {
+        finalisationError.value =
+            error?.message
+            ?? 'Migration finalisation failed.'
+    } finally {
+        finalising.value = false
+    }
+}
+
+async function runVerification() {
+    if (!canVerify.value || verifying.value) {
+        return
+    }
+
+    verifying.value = true
+
+    try {
+        const response = await fetch(
+            `/admin/migrations/${migrationState.value.id}/execution/verify`,
+            {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRF-TOKEN': document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content ?? '',
+                },
+                body: JSON.stringify({}),
+            }
+        )
+
+        const payload = await response.json()
+
+        if (!response.ok) {
+            throw new Error(
+                payload.message
+                ?? 'Post-migration verification failed to run.'
+            )
+        }
+
+        migrationState.value = payload.migration
+    } catch (error: any) {
+        migrationState.value = {
+            ...migrationState.value,
+            verification: {
+                ...(verification.value ?? {}),
+                status: 'verification_failed',
+                verified: false,
+                checked_at: new Date().toISOString(),
+                error: error?.message
+                    ?? 'Post-migration verification failed to run.',
+            },
+        }
+    } finally {
+        verifying.value = false
+    }
+}
+
+function verificationCheckClass(status: string) {
+    switch (status) {
+        case 'passed':
+            return 'border-status-success/20 bg-status-success/5'
+
+        case 'warning':
+            return 'border-status-warning/20 bg-status-warning/5'
+
+        case 'failed':
+            return 'border-status-danger/20 bg-status-danger/5'
+
+        default:
+            return 'border-zinc-800 bg-black/20'
+    }
+}
+
+function verificationCheckTextClass(status: string) {
+    switch (status) {
+        case 'passed':
+            return 'text-status-success'
+
+        case 'warning':
+            return 'text-status-warning'
+
+        case 'failed':
+            return 'text-status-danger'
+
+        default:
+            return 'text-zinc-500'
+    }
+}
+
+function credentialKey(server: any, database: any) {
+    return `${server.id}:${database.destination?.credential_key ?? database.source?.id ?? database.source?.database ?? 'database'}`
+}
+
+function credentialPassword(server: any, database: any) {
+    return server.database_credentials?.[database.destination?.credential_key]?.password
+        ?? ''
+}
+
+function toggleCredential(server: any, database: any) {
+    const key = credentialKey(server, database)
+
+    revealedPasswords.value[key] =
+        !revealedPasswords.value[key]
+}
+
+async function copyCredential(server: any, database: any) {
+    const password = credentialPassword(server, database)
+
+    if (!password) {
+        return
+    }
+
+    await navigator.clipboard.writeText(
+        password
+    )
+
+    const key = credentialKey(server, database)
+    copiedCredential.value = key
+
+    window.setTimeout(() => {
+        if (copiedCredential.value === key) {
+            copiedCredential.value = null
+        }
+    }, 1800)
 }
 
 async function pollStatus() {
@@ -365,6 +518,48 @@ function databaseStatusClass(status: string) {
     }
 }
 
+function retryServer(server: any) {
+    if (
+        server.status !== 'failed'
+        || retryingServers.value[server.id]
+    ) {
+        return
+    }
+
+    retryingServers.value[server.id] = true
+
+    router.post(
+        `/admin/migrations/${migrationState.value.id}/execution/servers/${server.id}/retry`,
+        {},
+        {
+            preserveScroll: true,
+
+            onSuccess: () => {
+                server.status = 'queued'
+                server.current_stage =
+                    server.destination_cell_id
+                        ? 'Retry queued; destination Cell will be reused'
+                        : 'Retry queued; destination Cell will be created'
+                server.error = null
+
+                migrationState.value = {
+                    ...migrationState.value,
+                    status: 'running',
+                    current_stage: `Retrying ${server.name}`,
+                    error: null,
+                    verification: {},
+                }
+
+                startPolling()
+            },
+
+            onFinish: () => {
+                retryingServers.value[server.id] = false
+            },
+        }
+    )
+}
+
 function retryDatabases(server: any) {
     router.post(
         `/admin/migrations/${migrationState.value.id}/execution/servers/${server.id}/databases/retry`,
@@ -378,76 +573,61 @@ function retryDatabases(server: any) {
     )
 }
 
-function databaseCredentialKey(database: any) {
-    return database?.destination?.credential_key ?? null
+function historyLabel(item: any) {
+    switch (item.type) {
+        case 'server_retry':
+            return `Retried ${item.server_name ?? 'server'}`
+
+        case 'database_retry':
+            return `Retried databases for ${item.server_name ?? 'server'}`
+
+        case 'verification':
+            return item.status === 'verified'
+                ? 'Migration verification passed'
+                : 'Migration verification found issues'
+
+        case 'finalisation':
+            return 'Migration finalised'
+
+        default:
+            return item.type ?? 'Migration event'
+    }
 }
 
-function databasePassword(server: any, database: any) {
-    const key = databaseCredentialKey(database)
+function historyDescription(item: any) {
+    switch (item.type) {
+        case 'server_retry':
+            return item.reused_destination_cell
+                ? 'Reused the existing destination Cell and restarted file import.'
+                : 'Queued Cell creation and file import again.'
 
-    if (!key) {
-        return null
+        case 'database_retry':
+            return `${item.database_count ?? 0} database retry/retries queued.`
+
+        case 'verification':
+            return `${item.passed ?? 0} passed · ${item.warnings ?? 0} warnings · ${item.failed ?? 0} failed`
+
+        case 'finalisation':
+            return item.message
+                ?? 'Stored source credentials were removed.'
+
+        default:
+            return ''
     }
-
-    return server.database_credentials?.[key]?.password ?? null
 }
 
-function databasePasswordVisible(database: any) {
-    const key = databaseCredentialKey(database)
-
-    if (!key) {
-        return false
+function formatHistoryDate(value: string) {
+    if (!value) {
+        return ''
     }
 
-    return revealedDatabasePasswords.value[key] === true
-}
-
-function toggleDatabasePassword(database: any) {
-    const key = databaseCredentialKey(database)
-
-    if (!key) {
-        return
-    }
-
-    revealedDatabasePasswords.value[key] =
-        !revealedDatabasePasswords.value[key]
-}
-
-async function copyDatabasePassword(server: any, database: any) {
-    const key = databaseCredentialKey(database)
-    const password = databasePassword(server, database)
-
-    if (!key || !password) {
-        return
-    }
-
-    await navigator.clipboard.writeText(password)
-
-    copiedDatabasePassword.value = key
-
-    window.setTimeout(() => {
-        if (copiedDatabasePassword.value === key) {
-            copiedDatabasePassword.value = null
+    return new Intl.DateTimeFormat(
+        undefined,
+        {
+            dateStyle: 'medium',
+            timeStyle: 'short',
         }
-    }, 1800)
-}
-
-async function copyCredentialValue(key: string, value: any) {
-    if (value === null || value === undefined || String(value) === '') {
-        return
-    }
-
-    await navigator.clipboard.writeText(
-        String(value)
-    )
-
-    copiedCredential.value = key
-
-    window.setTimeout(() => {
-        if (copiedCredential.value === key) {
-            copiedCredential.value = null
-        }
-    }, 1800)
+    ).format(new Date(value))
 }
 
 onMounted(() => {
@@ -478,9 +658,9 @@ onUnmounted(() => {
                                             ? 'border-status-success/30 bg-status-success/10 text-status-success'
                                             : migrationState.status === 'running'
                                                 ? 'border-hive/30 bg-hive/10 text-hive'
-                                                : migrationState.status === 'completed'
+                                                : ['completed', 'verified', 'finalised'].includes(migrationState.status)
                                                     ? 'border-status-success/30 bg-status-success/10 text-status-success'
-                                                    : migrationState.status === 'completed_with_errors' || migrationState.status === 'failed'
+                                                    : ['completed_with_errors', 'failed', 'verification_failed'].includes(migrationState.status)
                                                         ? 'border-status-danger/30 bg-status-danger/10 text-status-danger'
                                                         : 'border-status-warning/30 bg-status-warning/10 text-status-warning'"
                                     >
@@ -503,6 +683,14 @@ onUnmounted(() => {
 
                             <div class="flex flex-wrap gap-2">
                                 <Link
+                                    v-if="[
+                                        'execution_ready',
+                                        'running',
+                                        'database_pending',
+                                        'database_transferring',
+                                        'database_failed',
+                                        'failed',
+                                    ].includes(migrationState.status)"
                                     :href="`/admin/migrations/${migrationState.id}/preflight`"
                                     class="inline-flex items-center gap-2 rounded-button border border-zinc-800 bg-[#0d0f11] px-4 py-2 text-sm font-black text-zinc-300 transition hover:border-hive hover:text-hive"
                                 >
@@ -530,6 +718,40 @@ onUnmounted(() => {
                                 >
                                     <Database class="size-4" />
                                     {{ startingDatabases ? 'Queueing Databases...' : 'Start Database Transfer' }}
+                                </button>
+
+                                <button
+                                    v-if="canVerify"
+                                    type="button"
+                                    class="inline-flex items-center gap-2 rounded-button border border-hive bg-hive px-5 py-2.5 text-sm font-black text-black transition hover:bg-hive-light disabled:opacity-50"
+                                    :disabled="verifying"
+                                    @click="runVerification"
+                                >
+                                    <ShieldCheck
+                                        class="size-4"
+                                        :class="{ 'animate-pulse': verifying }"
+                                    />
+                                    {{ verifying
+                                        ? 'Verifying...'
+                                        : verification.checked_at
+                                            ? 'Run Verification Again'
+                                            : 'Verify Migration' }}
+                                </button>
+
+                                <button
+                                    v-if="canFinalise"
+                                    type="button"
+                                    class="inline-flex items-center gap-2 rounded-button border border-status-success bg-status-success px-5 py-2.5 text-sm font-black text-black transition hover:opacity-90 disabled:opacity-50"
+                                    :disabled="finalising"
+                                    @click="showFinaliseModal = true"
+                                >
+                                    <LockKeyhole
+                                        class="size-4"
+                                        :class="{ 'animate-pulse': finalising }"
+                                    />
+                                    {{ finalising
+                                        ? 'Finalising...'
+                                        : 'Finalise Migration' }}
                                 </button>
 
                                 <button
@@ -620,6 +842,25 @@ onUnmounted(() => {
                     </section>
 
                     <section
+                        v-if="finalisationError"
+                        class="rounded-panel border border-status-danger/30 bg-status-danger/10 p-5 sm:p-6"
+                    >
+                        <div class="flex items-start gap-3">
+                            <CircleAlert class="mt-0.5 size-5 shrink-0 text-status-danger" />
+
+                            <div>
+                                <div class="text-sm font-black text-status-danger">
+                                    Migration finalisation failed
+                                </div>
+
+                                <p class="mt-1 text-sm leading-6 text-zinc-300">
+                                    {{ finalisationError }}
+                                </p>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section
                         v-if="migrationState.error"
                         class="rounded-panel border border-status-danger/30 bg-status-danger/10 p-4"
                     >
@@ -628,73 +869,6 @@ onUnmounted(() => {
 
                             <div class="text-sm font-bold leading-6 text-status-danger">
                                 {{ migrationState.error }}
-                            </div>
-                        </div>
-                    </section>
-
-                    <section
-                        v-if="migrationFinished"
-                        class="rounded-panel border p-5 sm:p-6"
-                        :class="migrationState.status === 'completed'
-                            ? 'border-status-success/30 bg-status-success/5'
-                            : 'border-status-warning/30 bg-status-warning/5'"
-                    >
-                        <div class="flex items-start gap-3">
-                            <CircleCheck
-                                v-if="migrationState.status === 'completed'"
-                                class="mt-0.5 size-6 shrink-0 text-status-success"
-                            />
-
-                            <TriangleAlert
-                                v-else
-                                class="mt-0.5 size-6 shrink-0 text-status-warning"
-                            />
-
-                            <div class="min-w-0 flex-1">
-                                <h2 class="text-lg font-black text-white">
-                                    {{ migrationState.status === 'completed'
-                                        ? 'Migration Complete'
-                                        : 'Migration Completed with Errors' }}
-                                </h2>
-
-                                <p class="mt-1 text-sm leading-6 text-zinc-400">
-                                    Destination Cells and copied files are now owned by HivePanel. Pterodactyl source files are not removed automatically.
-                                </p>
-
-                                <div class="mt-4 grid gap-3 sm:grid-cols-3">
-                                    <div class="rounded-button border border-zinc-800 bg-black/20 p-4">
-                                        <div class="text-[10px] font-black uppercase tracking-wide text-zinc-600">
-                                            Cells & Files
-                                        </div>
-                                        <div class="mt-1 text-xl font-black text-status-success">
-                                            {{ completedCount }}/{{ serverState.length }}
-                                        </div>
-                                    </div>
-
-                                    <div class="rounded-button border border-zinc-800 bg-black/20 p-4">
-                                        <div class="text-[10px] font-black uppercase tracking-wide text-zinc-600">
-                                            Databases
-                                        </div>
-                                        <div
-                                            class="mt-1 text-xl font-black"
-                                            :class="failedDatabaseCount > 0 ? 'text-status-warning' : 'text-status-success'"
-                                        >
-                                            {{ completedDatabaseCount }}/{{ selectedDatabaseTotal }}
-                                        </div>
-                                    </div>
-
-                                    <div class="rounded-button border border-zinc-800 bg-black/20 p-4">
-                                        <div class="text-[10px] font-black uppercase tracking-wide text-zinc-600">
-                                            Failed
-                                        </div>
-                                        <div
-                                            class="mt-1 text-xl font-black"
-                                            :class="failedCount > 0 ? 'text-status-danger' : 'text-status-success'"
-                                        >
-                                            {{ failedCount }}
-                                        </div>
-                                    </div>
-                                </div>
                             </div>
                         </div>
                     </section>
@@ -803,6 +977,27 @@ onUnmounted(() => {
                                 </div>
 
                                 <div
+                                    v-if="server.status === 'failed'"
+                                    class="mt-4 rounded-button border border-status-warning/20 bg-status-warning/5 p-3"
+                                >
+                                    <div class="flex items-start gap-2">
+                                        <TriangleAlert class="mt-0.5 size-4 shrink-0 text-status-warning" />
+
+                                        <div>
+                                            <div class="text-xs font-black text-status-warning">
+                                                Retry available
+                                            </div>
+
+                                            <p class="mt-1 text-xs leading-5 text-zinc-500">
+                                                {{ server.destination_cell_id
+                                                    ? 'The existing destination Cell will be reused. HivePanel will restart only the file-import phase and will not create a duplicate Cell.'
+                                                    : 'The failure happened before a destination Cell was retained. HivePanel will retry the normal Cell creation and file-import path.' }}
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div
                                     v-if="selectedDatabaseCount(server) > 0"
                                     class="mt-4 overflow-hidden rounded-button border border-zinc-800 bg-black/20"
                                 >
@@ -833,110 +1028,75 @@ onUnmounted(() => {
                                                     v-if="database.status === 'completed' && database.destination"
                                                     class="grid gap-x-5 gap-y-1 text-xs text-zinc-500 sm:grid-cols-2"
                                                 >
-                                                    <div class="flex items-center gap-2">
-                                                        <span>
-                                                            Host:
-                                                            <strong class="text-zinc-300">
-                                                                {{ database.destination.host }}:{{ database.destination.port }}
+                                                    <span>
+                                                        Host:
+                                                        <strong class="text-zinc-300">
+                                                            {{ database.destination.host }}:{{ database.destination.port }}
+                                                        </strong>
+                                                    </span>
+
+                                                    <span>
+                                                        Database:
+                                                        <strong class="text-zinc-300">
+                                                            {{ database.destination.database }}
+                                                        </strong>
+                                                    </span>
+
+                                                    <span>
+                                                        Username:
+                                                        <strong class="text-zinc-300">
+                                                            {{ database.destination.username }}
+                                                        </strong>
+                                                    </span>
+
+                                                    <span>
+                                                        Password:
+                                                        <span class="ml-1 inline-flex items-center gap-1.5">
+                                                            <strong class="font-mono text-zinc-300">
+                                                                {{ credentialPassword(server, database)
+                                                                    ? (
+                                                                        revealedPasswords[credentialKey(server, database)]
+                                                                            ? credentialPassword(server, database)
+                                                                            : '••••••••••••••••'
+                                                                    )
+                                                                    : 'Unavailable' }}
                                                             </strong>
-                                                        </span>
-
-                                                        <button
-                                                            type="button"
-                                                            class="text-zinc-600 transition hover:text-hive"
-                                                            title="Copy host"
-                                                            @click="copyCredentialValue(
-                                                                `${databaseCredentialKey(database)}:host`,
-                                                                `${database.destination.host}:${database.destination.port}`
-                                                            )"
-                                                        >
-                                                            <Clipboard class="size-3.5" />
-                                                        </button>
-                                                    </div>
-
-                                                    <div class="flex items-center gap-2">
-                                                        <span>
-                                                            Database:
-                                                            <strong class="text-zinc-300">
-                                                                {{ database.destination.database }}
-                                                            </strong>
-                                                        </span>
-
-                                                        <button
-                                                            type="button"
-                                                            class="text-zinc-600 transition hover:text-hive"
-                                                            title="Copy database"
-                                                            @click="copyCredentialValue(
-                                                                `${databaseCredentialKey(database)}:database`,
-                                                                database.destination.database
-                                                            )"
-                                                        >
-                                                            <Clipboard class="size-3.5" />
-                                                        </button>
-                                                    </div>
-
-                                                    <div class="flex items-center gap-2">
-                                                        <span>
-                                                            Username:
-                                                            <strong class="text-zinc-300">
-                                                                {{ database.destination.username }}
-                                                            </strong>
-                                                        </span>
-
-                                                        <button
-                                                            type="button"
-                                                            class="text-zinc-600 transition hover:text-hive"
-                                                            title="Copy username"
-                                                            @click="copyCredentialValue(
-                                                                `${databaseCredentialKey(database)}:username`,
-                                                                database.destination.username
-                                                            )"
-                                                        >
-                                                            <Clipboard class="size-3.5" />
-                                                        </button>
-                                                    </div>
-
-                                                    <div class="sm:col-span-2">
-                                                        <div class="flex flex-wrap items-center gap-2">
-                                                            <span class="text-zinc-500">
-                                                                Password:
-                                                            </span>
-
-                                                            <code class="rounded border border-zinc-800 bg-black/30 px-2 py-1 font-mono text-zinc-300">
-                                                                {{
-                                                                    databasePasswordVisible(database)
-                                                                        ? (databasePassword(server, database) || 'Unavailable')
-                                                                        : (databasePassword(server, database) ? '••••••••••••••••' : 'Unavailable')
-                                                                }}
-                                                            </code>
 
                                                             <button
-                                                                v-if="databasePassword(server, database)"
+                                                                v-if="credentialPassword(server, database)"
                                                                 type="button"
-                                                                class="rounded-button border border-zinc-800 bg-[#0d0f11] px-2.5 py-1 text-[11px] font-black text-zinc-400 transition hover:border-hive/40 hover:text-hive"
-                                                                @click="toggleDatabasePassword(database)"
+                                                                class="text-zinc-500 transition hover:text-hive"
+                                                                :title="revealedPasswords[credentialKey(server, database)] ? 'Hide password' : 'Reveal password'"
+                                                                @click="toggleCredential(server, database)"
                                                             >
-                                                                {{ databasePasswordVisible(database) ? 'Hide' : 'Reveal' }}
+                                                                <EyeOff
+                                                                    v-if="revealedPasswords[credentialKey(server, database)]"
+                                                                    class="size-3.5"
+                                                                />
+                                                                <Eye
+                                                                    v-else
+                                                                    class="size-3.5"
+                                                                />
                                                             </button>
 
                                                             <button
-                                                                v-if="databasePassword(server, database)"
+                                                                v-if="credentialPassword(server, database)"
                                                                 type="button"
-                                                                class="rounded-button border border-zinc-800 bg-[#0d0f11] px-2.5 py-1 text-[11px] font-black text-zinc-400 transition hover:border-hive/40 hover:text-hive"
-                                                                @click="copyDatabasePassword(server, database)"
+                                                                class="text-zinc-500 transition hover:text-hive"
+                                                                title="Copy password"
+                                                                @click="copyCredential(server, database)"
                                                             >
-                                                                {{
-                                                                    copiedDatabasePassword === databaseCredentialKey(database)
-                                                                        ? 'Copied'
-                                                                        : 'Copy'
-                                                                }}
+                                                                <CircleCheck
+                                                                    v-if="copiedCredential === credentialKey(server, database)"
+                                                                    class="size-3.5 text-status-success"
+                                                                />
+                                                                <Clipboard
+                                                                    v-else
+                                                                    class="size-3.5"
+                                                                />
                                                             </button>
-                                                        </div>
-
-                                                        <p class="mt-1 text-[11px] leading-5 text-zinc-600">
-                                                            Newly generated HivePanel destination credential. Update the migrated application if it still references the old database password.
-                                                        </p>
-                                                    </div>
+                                                        </span>
+                                                    </span>
                                                 </div>
                                             </div>
 
@@ -949,6 +1109,24 @@ onUnmounted(() => {
                                         </div>
                                     </div>
                                 </div>
+
+                                <button
+                                    v-if="server.status === 'failed'"
+                                    type="button"
+                                    class="mt-4 inline-flex items-center gap-2 rounded-button border border-status-warning bg-status-warning px-4 py-2 text-xs font-black text-black transition hover:opacity-90 disabled:opacity-50"
+                                    :disabled="retryingServers[server.id]"
+                                    @click="retryServer(server)"
+                                >
+                                    <RefreshCw
+                                        class="size-3.5"
+                                        :class="{ 'animate-spin': retryingServers[server.id] }"
+                                    />
+                                    {{ retryingServers[server.id]
+                                        ? 'Queueing Retry...'
+                                        : server.destination_cell_id
+                                            ? 'Retry File Migration'
+                                            : 'Retry Server Migration' }}
+                                </button>
 
                                 <button
                                     v-if="server.status === 'database_failed'"
@@ -1004,7 +1182,7 @@ onUnmounted(() => {
                     </section>
 
                     <section
-                        v-if="migrationState.status === 'completed'"
+                        v-if="['completed', 'verified', 'verification_failed'].includes(migrationState.status)"
                         class="rounded-panel border border-status-success/30 bg-status-success/5 p-5 sm:p-6"
                     >
                         <div class="flex items-start gap-3">
@@ -1012,17 +1190,225 @@ onUnmounted(() => {
 
                             <div>
                                 <h2 class="font-black text-white">
-                                    Migration complete
+                                    Migration transfer complete
                                 </h2>
 
                                 <p class="mt-1 text-sm leading-6 text-zinc-400">
-                                    All selected servers have been created and their files imported successfully.
+                                    All selected server transfer phases have finished. Source data has not been automatically deleted.
                                 </p>
                             </div>
                         </div>
                     </section>
+
+                    <section
+                        v-if="verification.checked_at"
+                        class="overflow-hidden rounded-panel border bg-surface"
+                        :class="verification.verified
+                            ? 'border-status-success/30'
+                            : 'border-status-danger/30'"
+                    >
+                        <div
+                            class="border-b p-5 sm:p-6"
+                            :class="verification.verified
+                                ? 'border-status-success/20 bg-status-success/5'
+                                : 'border-status-danger/20 bg-status-danger/5'"
+                        >
+                            <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                                <div class="flex items-start gap-3">
+                                    <ShieldCheck
+                                        class="mt-0.5 size-5 shrink-0"
+                                        :class="verification.verified
+                                            ? 'text-status-success'
+                                            : 'text-status-danger'"
+                                    />
+
+                                    <div>
+                                        <h2 class="font-black text-white">
+                                            {{ verification.verified
+                                                ? 'Migration verified'
+                                                : 'Verification found issues' }}
+                                        </h2>
+
+                                        <p class="mt-1 text-sm leading-6 text-zinc-400">
+                                            {{ verification.verified
+                                                ? 'HivePanel verified the destination Cells, files, install state, Worker definitions, allocations and selected databases.'
+                                                : `${verification.summary?.failed ?? 0} verification check(s) require attention. The completed transfer has not been rolled back or deleted.` }}
+                                        </p>
+
+                                        <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs font-bold text-zinc-500">
+                                            <span>{{ verification.summary?.passed ?? 0 }} passed</span>
+                                            <span>{{ verification.summary?.warnings ?? 0 }} warnings</span>
+                                            <span>{{ verification.summary?.failed ?? 0 }} failed</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <button
+                                    type="button"
+                                    class="inline-flex shrink-0 items-center gap-2 rounded-button border border-zinc-700 bg-[#0d0f11] px-4 py-2 text-xs font-black text-zinc-300 transition hover:border-hive hover:text-hive disabled:opacity-50"
+                                    :disabled="verifying"
+                                    @click="runVerification"
+                                >
+                                    <RefreshCw class="size-3.5" />
+                                    {{ verifying ? 'Verifying...' : 'Run Again' }}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="divide-y divide-zinc-800">
+                            <div
+                                v-for="serverReport in verification.servers ?? []"
+                                :key="serverReport.server_id"
+                                class="p-5 sm:p-6"
+                            >
+                                <div class="flex flex-wrap items-center justify-between gap-3">
+                                    <div>
+                                        <div class="font-black text-white">
+                                            {{ serverReport.name }}
+                                        </div>
+
+                                        <Link
+                                            v-if="serverReport.cell_id"
+                                            :href="`/admin/cells/${serverReport.cell_id}`"
+                                            class="mt-1 inline-flex items-center gap-1 text-xs font-black text-hive hover:text-hive-light"
+                                        >
+                                            Open Cell
+                                            <ExternalLink class="size-3" />
+                                        </Link>
+                                    </div>
+
+                                    <span
+                                        class="rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-wide"
+                                        :class="serverReport.status === 'passed'
+                                            ? 'border-status-success/30 bg-status-success/10 text-status-success'
+                                            : serverReport.status === 'warning'
+                                                ? 'border-status-warning/30 bg-status-warning/10 text-status-warning'
+                                                : 'border-status-danger/30 bg-status-danger/10 text-status-danger'"
+                                    >
+                                        {{ serverReport.status }}
+                                    </span>
+                                </div>
+
+                                <div class="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                                    <div
+                                        v-for="check in serverReport.checks ?? []"
+                                        :key="check.key"
+                                        class="rounded-button border p-3"
+                                        :class="verificationCheckClass(check.status)"
+                                    >
+                                        <div
+                                            class="text-xs font-black"
+                                            :class="verificationCheckTextClass(check.status)"
+                                        >
+                                            {{ check.label }}
+                                        </div>
+
+                                        <p class="mt-1 text-xs leading-5 text-zinc-500">
+                                            {{ check.message }}
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+                    <section
+                        v-if="migrationState.status === 'finalised'"
+                        class="rounded-panel border border-status-success/30 bg-status-success/5 p-5 sm:p-6"
+                    >
+                        <div class="flex items-start gap-3">
+                            <LockKeyhole class="mt-0.5 size-5 shrink-0 text-status-success" />
+
+                            <div>
+                                <h2 class="font-black text-white">
+                                    Migration finalised
+                                </h2>
+
+                                <p class="mt-1 text-sm leading-6 text-zinc-400">
+                                    Stored source API, SFTP/SSH and migration database credentials have been removed from HivePanel. Source server files and source databases were not deleted.
+                                </p>
+
+                                <div class="mt-3 flex flex-wrap gap-2 text-xs font-bold">
+                                    <span class="rounded-full border border-status-success/20 bg-status-success/10 px-2.5 py-1 text-status-success">
+                                        Credentials removed
+                                    </span>
+
+                                    <span class="rounded-full border border-zinc-700 bg-zinc-800 px-2.5 py-1 text-zinc-400">
+                                        Source files retained
+                                    </span>
+
+                                    <span class="rounded-full border border-zinc-700 bg-zinc-800 px-2.5 py-1 text-zinc-400">
+                                        Source databases retained
+                                    </span>
+                                </div>
+
+                                <p class="mt-3 text-xs leading-5 text-zinc-600">
+                                    This migration is now read-only for historical reference. Retrying source transfers or discovery would require new source credentials in a new migration.
+                                </p>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section
+                        v-if="(migrationState.execution_history ?? []).length > 0"
+                        class="overflow-hidden rounded-panel border border-zinc-800 bg-surface"
+                    >
+                        <div class="border-b border-zinc-800 p-5 sm:p-6">
+                            <h2 class="text-lg font-black">
+                                Migration History
+                            </h2>
+
+                            <p class="mt-1 text-sm text-zinc-500">
+                                Recovery actions and verification runs are retained with this migration.
+                            </p>
+                        </div>
+
+                        <div class="divide-y divide-zinc-800">
+                            <div
+                                v-for="(item, index) in [...(migrationState.execution_history ?? [])].reverse()"
+                                :key="`${item.at ?? index}:${index}`"
+                                class="flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between sm:px-6"
+                            >
+                                <div>
+                                    <div class="text-sm font-black text-white">
+                                        {{ historyLabel(item) }}
+                                    </div>
+
+                                    <p
+                                        v-if="historyDescription(item)"
+                                        class="mt-1 text-xs leading-5 text-zinc-500"
+                                    >
+                                        {{ historyDescription(item) }}
+                                    </p>
+
+                                    <p
+                                        v-if="item.previous_error"
+                                        class="mt-1 text-xs leading-5 text-status-danger"
+                                    >
+                                        Previous error: {{ item.previous_error }}
+                                    </p>
+                                </div>
+
+                                <div class="shrink-0 text-xs font-bold text-zinc-600">
+                                    {{ formatHistoryDate(item.at) }}
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
                 </div>
             </main>
         </div>
+
+        <ConfirmationModal
+            :open="showFinaliseModal"
+            title="Finalise Migration?"
+            description="This permanently removes the stored source API key, SFTP/SSH credentials, private keys, source database credentials and other source authentication data from this migration. Source server files and databases will not be deleted. Once finalised, this migration cannot be retried without creating a new migration with new source credentials."
+            confirm-text="Finalise Migration"
+            cancel-text="Cancel"
+            :danger="true"
+            :loading="finalising"
+            @cancel="showFinaliseModal = false"
+            @confirm="finaliseMigration"
+        />
     </AppLayout>
 </template>

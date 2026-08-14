@@ -13,6 +13,20 @@ use Throwable;
 
 abstract class PterodactylCompatibleSourceConnector implements MigrationSourceConnector
 {
+    private array $compatibilityCapabilities = [
+        'application_api' => false,
+        'servers' => false,
+        'users' => false,
+        'nodes' => false,
+        'allocations' => false,
+        'eggs' => false,
+        'startup' => false,
+        'docker_images' => false,
+        'environment' => false,
+    ];
+
+    private array $compatibilityWarnings = [];
+
     public function __construct(
         private readonly string $panelUrl,
         private readonly string $apiKey,
@@ -39,6 +53,8 @@ abstract class PterodactylCompatibleSourceConnector implements MigrationSourceCo
         }
 
         $this->assertSuccessfulResponse($response);
+
+        $this->compatibilityCapabilities['application_api'] = true;
     }
 
     public function discoverServers(): array
@@ -50,12 +66,16 @@ abstract class PterodactylCompatibleSourceConnector implements MigrationSourceCo
                 : null,
         );
 
+        $this->compatibilityCapabilities['users'] = true;
+
         $nodes = $this->fetchLookup(
             '/api/application/nodes',
             fn (array $attributes) => isset($attributes['id'])
                 ? (string) $attributes['id']
                 : null,
         );
+
+        $this->compatibilityCapabilities['nodes'] = true;
 
         $serverResources = $this->fetchPaginatedResources(
             '/api/application/servers',
@@ -64,9 +84,11 @@ abstract class PterodactylCompatibleSourceConnector implements MigrationSourceCo
             ],
         );
 
+        $this->compatibilityCapabilities['servers'] = true;
+
         $eggs = $this->fetchEggLookup($serverResources);
 
-        return collect($serverResources)
+        $servers = collect($serverResources)
             ->map(fn (array $server) => $this->normaliseServer(
                 $server,
                 $users,
@@ -75,6 +97,31 @@ abstract class PterodactylCompatibleSourceConnector implements MigrationSourceCo
             ))
             ->values()
             ->all();
+
+        $this->inspectServerCapabilities(
+            $serverResources,
+            $servers,
+            $eggs,
+        );
+
+        return $servers;
+    }
+
+    public function compatibilityReport(): array
+    {
+        $warnings = array_values(
+            array_unique(
+                $this->compatibilityWarnings
+            )
+        );
+
+        return [
+            'status' => $warnings === []
+                ? 'full'
+                : 'compatible_with_warnings',
+            'capabilities' => $this->compatibilityCapabilities,
+            'warnings' => $warnings,
+        ];
     }
 
     protected function client(): PendingRequest
@@ -248,6 +295,138 @@ abstract class PterodactylCompatibleSourceConnector implements MigrationSourceCo
         }
 
         return $lookup;
+    }
+
+    private function inspectServerCapabilities(
+        array $resources,
+        array $servers,
+        array $eggs,
+    ): void {
+        $serverCollection = collect($servers);
+        $resourceCollection = collect($resources);
+
+        $missingAllocations = $serverCollection
+            ->filter(function (DiscoveredServer $server) {
+                $data = $server->toArray();
+
+                return count(
+                    (array) (
+                        $data['source_allocations']
+                        ?? []
+                    )
+                ) === 0;
+            })
+            ->count();
+
+        $this->compatibilityCapabilities['allocations'] =
+            $missingAllocations === 0;
+
+        if ($missingAllocations > 0) {
+            $this->compatibilityWarnings[] =
+                "{$missingAllocations} server(s) did not expose allocation data through the compatible Application API.";
+        }
+
+        $eggReferences = $resourceCollection
+            ->map(function (array $resource) {
+                $attributes = $resource['attributes'] ?? [];
+
+                if (
+                    ! isset($attributes['nest'])
+                    || ! isset($attributes['egg'])
+                ) {
+                    return null;
+                }
+
+                return $this->eggKey(
+                    (string) $attributes['nest'],
+                    (string) $attributes['egg'],
+                );
+            })
+            ->filter()
+            ->unique()
+            ->values();
+
+        $missingEggs = $eggReferences
+            ->reject(
+                fn (string $key) =>
+                    array_key_exists(
+                        $key,
+                        $eggs,
+                    )
+            )
+            ->count();
+
+        $this->compatibilityCapabilities['eggs'] =
+            $missingEggs === 0;
+
+        if ($missingEggs > 0) {
+            $this->compatibilityWarnings[] =
+                "{$missingEggs} Egg definition(s) could not be read. HivePanel will continue using server-level startup, image and environment metadata where available.";
+        }
+
+        $missingStartup = $resourceCollection
+            ->filter(function (array $resource) {
+                $attributes = $resource['attributes'] ?? [];
+
+                return blank(
+                    data_get(
+                        $attributes,
+                        'container.startup',
+                        $attributes['startup'] ?? null,
+                    )
+                );
+            })
+            ->count();
+
+        $this->compatibilityCapabilities['startup'] =
+            $missingStartup === 0;
+
+        if ($missingStartup > 0) {
+            $this->compatibilityWarnings[] =
+                "{$missingStartup} server(s) did not expose a startup command.";
+        }
+
+        $missingImages = $resourceCollection
+            ->filter(function (array $resource) {
+                $attributes = $resource['attributes'] ?? [];
+
+                return blank(
+                    data_get(
+                        $attributes,
+                        'container.image',
+                    )
+                );
+            })
+            ->count();
+
+        $this->compatibilityCapabilities['docker_images'] =
+            $missingImages === 0;
+
+        if ($missingImages > 0) {
+            $this->compatibilityWarnings[] =
+                "{$missingImages} server(s) did not expose a Docker image.";
+        }
+
+        $missingEnvironment = $resourceCollection
+            ->filter(function (array $resource) {
+                $attributes = $resource['attributes'] ?? [];
+
+                return ! is_array(
+                    data_get(
+                        $attributes,
+                        'container.environment',
+                    )
+                );
+            })
+            ->count();
+
+        $this->compatibilityCapabilities['environment'] =
+            $missingEnvironment === 0;
+
+        if ($missingEnvironment > 0) {
+            $this->compatibilityWarnings[] =
+                "{$missingEnvironment} server(s) did not expose environment variables in the expected format.";
+        }
     }
 
     protected function assertSuccessfulResponse(Response $response): void

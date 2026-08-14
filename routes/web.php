@@ -143,13 +143,17 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('/{migration}/preflight', [AdminMigrationController::class, 'preflight'])->name('preflight');
             Route::post('/{migration}/prepare', [AdminMigrationController::class, 'prepare'])->name('prepare');
             Route::patch('/{migration}/transfer', [AdminMigrationController::class, 'updateTransferConfiguration'])->name('transfer.update');
+            Route::post('/{migration}/transfer/detect-local', [AdminMigrationController::class, 'detectLocalSource'])->name('admin.migrations.transfer.detect-local');
             Route::post('/{migration}/transfer/generate-key', [AdminMigrationController::class, 'generateTransferKey'])->name('transfer.generate-key');
             Route::patch('/{migration}/database-transfer', [AdminMigrationController::class, 'updateDatabaseTransferConfiguration'])->name('database-transfer.update');
 
             Route::get('/{migration}/execution', [AdminMigrationController::class, 'execution'])->name('execution');
             Route::post('/{migration}/execution/start', [AdminMigrationController::class, 'startExecution'])->name('execution.start');
             Route::post('/{migration}/execution/databases/start', [AdminMigrationController::class, 'startDatabaseExecution'])->name('execution.databases.start');
+            Route::post('/{migration}/execution/servers/{server}/retry', [AdminMigrationController::class, 'retryServer'])->name('admin.migrations.execution.servers.retry');
             Route::post('/{migration}/execution/servers/{server}/databases/retry', [AdminMigrationController::class, 'retryDatabases'])->name('execution.databases.retry');
+            Route::post('/{migration}/execution/verify', [AdminMigrationController::class, 'verifyExecution'])->name('admin.migrations.execution.verify');
+            Route::post('/{migration}/execution/finalise', [AdminMigrationController::class, 'finaliseExecution'])->name('admin.migrations.execution.finalise');
             
             Route::delete('/{migration}', [AdminMigrationController::class, 'destroy'])->name('destroy');
         });

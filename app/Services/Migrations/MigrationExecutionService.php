@@ -190,6 +190,33 @@ class MigrationExecutionService
                 ->all(),
         );
 
+        $metadata = (array) $cell->metadata;
+
+        $metadata['migration_source'] = [
+            'family' => 'pterodactyl_compatible',
+            'source_type' => $migration->source_type,
+            'panel_url' => rtrim(
+                (string) data_get(
+                    $migration->source_config,
+                    'panel_url',
+                    ''
+                ),
+                '/'
+            ),
+            'source_server_id' => (string) $server->source_server_id,
+            'source_uuid' => strtolower(
+                (string) $server->source_uuid
+            ),
+            'source_node' => $server->source_node_name,
+            'migration_id' => (string) $migration->id,
+            'migration_name' => $migration->name,
+            'migrated_at' => now()->toISOString(),
+        ];
+
+        $cell->forceFill([
+            'metadata' => $metadata,
+        ])->save();
+
         $server->forceFill([
             'destination_cell_id' => $cell->id,
             'status' => 'transferring',
